@@ -212,24 +212,24 @@ func BuildPTRQuery(name string) ([]byte, error) {
 }
 
 // ParsePTRRecord decodes a PTR record's payload.
-func ParsePTRRecord(rr models.ResourceRecord) (PTRRecord, error) {
+func ParsePTRRecord(rr models.ResourceRecord) (models.PTRRecord, error) {
 	if rr.Type != models.TypePTR {
-		return PTRRecord{}, fmt.Errorf("dns: expected PTR record, got type %d", rr.Type)
+		return models.PTRRecord{}, fmt.Errorf("dns: expected PTR record, got type %d", rr.Type)
 	}
 	name, _, err := DecodeDNSName(rr.Data, 0)
 	if err != nil {
-		return PTRRecord{}, err
+		return models.PTRRecord{}, err
 	}
-	return PTRRecord{Name: rr.Name, Target: name}, nil
+	return models.PTRRecord{Name: rr.Name, Target: name}, nil
 }
 
 // ParseSRVRecord decodes an SRV record's payload.
-func ParseSRVRecord(rr models.ResourceRecord) (SRVRecord, error) {
+func ParseSRVRecord(rr models.ResourceRecord) (models.SRVRecord, error) {
 	if rr.Type != models.TypeSRV {
-		return SRVRecord{}, fmt.Errorf("dns: expected SRV record, got type %d", rr.Type)
+		return models.SRVRecord{}, fmt.Errorf("dns: expected SRV record, got type %d", rr.Type)
 	}
 	if len(rr.Data) < 7 {
-		return SRVRecord{}, fmt.Errorf("dns: SRV data too short")
+		return models.SRVRecord{}, fmt.Errorf("dns: SRV data too short")
 	}
 
 	priority := binary.BigEndian.Uint16(rr.Data[0:2])
@@ -237,9 +237,9 @@ func ParseSRVRecord(rr models.ResourceRecord) (SRVRecord, error) {
 	port := int(binary.BigEndian.Uint16(rr.Data[4:6]))
 	target, _, err := DecodeDNSName(rr.Data, 6)
 	if err != nil {
-		return SRVRecord{}, err
+		return models.SRVRecord{}, err
 	}
-	return SRVRecord{
+	return models.SRVRecord{
 		Name:     rr.Name,
 		Target:   target,
 		Port:     port,
@@ -249,15 +249,15 @@ func ParseSRVRecord(rr models.ResourceRecord) (SRVRecord, error) {
 }
 
 // ParseARecord decodes an A record's payload.
-func ParseARecord(rr models.ResourceRecord) (ARecord, error) {
+func ParseARecord(rr models.ResourceRecord) (models.ARecord, error) {
 	if rr.Type != models.TypeA {
-		return ARecord{}, fmt.Errorf("dns: expected A record, got type %d", rr.Type)
+		return models.ARecord{}, fmt.Errorf("dns: expected A record, got type %d", rr.Type)
 	}
 	if len(rr.Data) != 4 {
-		return ARecord{}, fmt.Errorf("dns: invalid A record length %d", len(rr.Data))
+		return models.ARecord{}, fmt.Errorf("dns: invalid A record length %d", len(rr.Data))
 	}
 
-	return ARecord{
+	return models.ARecord{
 		Name:    rr.Name,
 		Address: fmt.Sprintf("%d.%d.%d.%d", rr.Data[0], rr.Data[1], rr.Data[2], rr.Data[3]),
 	}, nil

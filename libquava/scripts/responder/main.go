@@ -1,15 +1,15 @@
-
 package main
 
 import (
-    "context"
-    "flag"
-    "fmt"
-    "log"
-    "net"
+	"context"
+	"flag"
+	"fmt"
+	"log"
+	"net"
 
-    qcrypto "libquava/crypto"
-    "libquava/protocol"
+	qcrypto "libquava/crypto"
+	"libquava/models"
+	"libquava/protocol"
 )
 
 func main() {
@@ -38,7 +38,7 @@ func main() {
     }
 }
 
-func handleConn(ctx context.Context, raw net.Conn, identity qcrypto.Identity) {
+func handleConn(ctx context.Context, raw net.Conn, identity models.Identity) {
     defer raw.Close()
     c := protocol.NewConn(raw)
 
@@ -67,7 +67,7 @@ func handleConn(ctx context.Context, raw net.Conn, identity qcrypto.Identity) {
     }
 }
 
-func handlePairRequest(ctx context.Context, c *protocol.Conn, req protocol.Message, identity qcrypto.Identity) error {
+func handlePairRequest(ctx context.Context, c *protocol.Conn, req protocol.Message, identity models.Identity) error {
     // extract initiator fields
     initiatorDeviceID, err := protocol.PayloadBytes(req.Payload, 0)
     if err != nil {

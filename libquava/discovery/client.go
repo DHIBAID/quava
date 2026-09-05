@@ -76,7 +76,7 @@ func (c *Client) discover(ctx context.Context, targetName string) ([]Device, err
 	}
 
 	ptrTargets := map[string]struct{}{}
-	srvByName := map[string]SRVRecord{}
+	srvByName := map[string]models.SRVRecord{}
 	addressByHost := map[string]string{}
 	devicesByKey := map[string]Device{}
 
@@ -185,7 +185,7 @@ func findMDNSInterface() (*net.Interface, error) {
 	return nil, fmt.Errorf("discovery: no suitable IPv4 multicast interface found")
 }
 
-func addDevice(mapByKey map[string]Device, instanceName string, srv SRVRecord, address string) (Device, bool) {
+func addDevice(mapByKey map[string]Device, instanceName string, srv models.SRVRecord, address string) (Device, bool) {
 	name := strings.TrimSuffix(instanceName, "._quava._udp.local.")
 	if name == "" {
 		name = strings.TrimSuffix(srv.Name, "._quava._udp.local.")

@@ -15,48 +15,12 @@ import (
 	"time"
 
 	qcrypto "libquava/crypto"
+	"libquava/models"
 	"libquava/protocol"
 )
 
-// InitiatorOptions controls the pairing initiator flow.
-type InitiatorOptions struct {
-	StorageDir   string
-	DeviceName   string
-	Capabilities []uint64
-}
-
-// PairResult is persisted after a successful pairing.
-type PairResult struct {
-	PeerDeviceID      string    `json:"peer_device_id"`
-	PeerPublicKey     []byte    `json:"peer_public_key"`
-	PeerDeviceName    string    `json:"peer_device_name"`
-	ProtocolVersion   uint64    `json:"protocol_version"`
-	Permissions       []uint64  `json:"permissions"`
-	PeerCredential    []byte    `json:"peer_credential"`
-	PairedAt          time.Time `json:"paired_at"`
-	VerificationCode  uint32    `json:"verification_code"`
-	SelectedVersion   uint64    `json:"selected_version"`
-	TransactionID     []byte    `json:"transaction_id"`
-	InitiatorDeviceID string    `json:"initiator_device_id"`
-}
-
-// IdentityFile is stored on disk for the long-term device identity.
-type IdentityFile struct {
-	DeviceName string             `json:"device_name"`
-	PrivateKey ed25519.PrivateKey `json:"private_key"`
-	PublicKey  ed25519.PublicKey  `json:"public_key"`
-}
-
-// TrustStore persists authenticated peers.
-type TrustStore struct {
-	Peers []PairResult `json:"peers"`
-}
-
-// ConfirmFunc is called after the verification code is displayed.
-type ConfirmFunc func(code uint32, remoteName string) (bool, error)
-
 // Initiate runs the initiator side of the pairing protocol.
-func Initiate(ctx context.Context, conn *protocol.Conn, options InitiatorOptions, confirm ConfirmFunc) (*PairResult, error) {
+func Initiate(ctx context.Context, conn *protocol.Conn, options models.InitiatorOptions, confirm models.ConfirmFunc) (*models.PairResult, error) {
 	if conn == nil {
 		return nil, errors.New("pairing: nil connection")
 	}
@@ -204,7 +168,7 @@ func Initiate(ctx context.Context, conn *protocol.Conn, options InitiatorOptions
 	if err != nil {
 		return nil, err
 	}
-	result := &PairResult{
+	result := &models.PairResult{
 		PeerDeviceID:      hex.EncodeToString(responderDeviceID),
 		PeerPublicKey:     append([]byte(nil), responderPublicKey...),
 		PeerDeviceName:    hex.EncodeToString(responderDeviceID),
@@ -223,27 +187,27 @@ func Initiate(ctx context.Context, conn *protocol.Conn, options InitiatorOptions
 	return result, nil
 }
 
-func loadOrCreateIdentity(storageDir, deviceName string) (IdentityFile, string, error) {
+func loadOrCreateIdentity(storageDir, deviceName string) (models.IdentityFile, string, error) {
 	if strings.TrimSpace(storageDir) == "" {
 		configDir, err := os.UserConfigDir()
 		if err != nil {
-			return IdentityFile{}, "", err
+			return models.IdentityFile{}, "", err
 		}
 		storageDir = filepath.Join(configDir, "quava")
 	}
 	if err := os.MkdirAll(storageDir, 0o755); err != nil {
-		return IdentityFile{}, "", err
+		return models.IdentityFile{}, "", err
 	}
 
 	identityPath := filepath.Join(storageDir, "identity.json")
 	data, err := os.ReadFile(identityPath)
 	if err == nil {
-		var file IdentityFile
+		var file models.IdentityFile
 		if err := json.Unmarshal(data, &file); err != nil {
-			return IdentityFile{}, "", err
+			return models.IdentityFile{}, "", err
 		}
 		if len(file.PrivateKey) != ed25519.PrivateKeySize || len(file.PublicKey) != ed25519.PublicKeySize {
-			return IdentityFile{}, "", errors.New("pairing: invalid identity file")
+			return models.IdentityFile{}, "", errors.New("pairing: invalid identity file")
 		}
 		if strings.TrimSpace(file.DeviceName) == "" {
 			file.DeviceName = fallbackDeviceName(deviceName)
@@ -251,25 +215,25 @@ func loadOrCreateIdentity(storageDir, deviceName string) (IdentityFile, string, 
 		return file, storageDir, nil
 	}
 	if !errors.Is(err, os.ErrNotExist) {
-		return IdentityFile{}, "", err
+		return models.IdentityFile{}, "", err
 	}
 
 	identity, err := qcrypto.GenerateIdentityKeyPair()
 	if err != nil {
-		return IdentityFile{}, "", err
+		return models.IdentityFile{}, "", err
 	}
-	file := IdentityFile{
+	file := models.IdentityFile{
 		DeviceName: fallbackDeviceName(deviceName),
 		PrivateKey: identity.PrivateKey,
 		PublicKey:  identity.PublicKey,
 	}
 	if err := saveJSON(identityPath, file); err != nil {
-		return IdentityFile{}, "", err
+		return models.IdentityFile{}, "", err
 	}
 	return file, storageDir, nil
 }
 
-func persistTrust(storageDir string, result PairResult) error {
+func persistTrust(storageDir string, result models.PairResult) error {
 	if strings.TrimSpace(storageDir) == "" {
 		configDir, err := os.UserConfigDir()
 		if err != nil {
@@ -282,7 +246,7 @@ func persistTrust(storageDir string, result PairResult) error {
 	}
 
 	trustPath := filepath.Join(storageDir, "trust.json")
-	store := TrustStore{}
+	store := models.TrustStore{}
 	data, err := os.ReadFile(trustPath)
 	if err == nil {
 		if err := json.Unmarshal(data, &store); err != nil {

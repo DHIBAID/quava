@@ -1,19 +1,19 @@
-
 package main
 
 import (
-    "bufio"
-    "context"
-    "flag"
-    "fmt"
-    "log"
-    "net"
-    "os"
-    "strings"
-    "time"
+	"bufio"
+	"context"
+	"flag"
+	"fmt"
+	"log"
+	"net"
+	"os"
+	"strings"
+	"time"
 
-    "libquava/pairing"
-    "libquava/protocol"
+	"libquava/models"
+	"libquava/pairing"
+	"libquava/protocol"
 )
 
 func main() {
@@ -33,7 +33,7 @@ func main() {
     conn := protocol.NewConn(netConn)
 
     reader := bufio.NewReader(os.Stdin)
-    result, err := pairing.Initiate(ctx, conn, pairing.InitiatorOptions{DeviceName: "local-test"}, func(code uint32, remoteName string) (bool, error) {
+    result, err := pairing.Initiate(ctx, conn, models.InitiatorOptions{DeviceName: "local-test"}, func(code uint32, remoteName string) (bool, error) {
         fmt.Printf("Pairing code for %s: %03d %03d\n", remoteName, code/1000, code%1000)
         fmt.Print("Confirm pairing? [y/N]: ")
         line, err := reader.ReadString('\n')

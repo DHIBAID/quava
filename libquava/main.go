@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"libquava/discovery"
+	"libquava/models"
 	"libquava/pairing"
 )
 
@@ -108,7 +109,7 @@ func cmdPair(args []string) {
 	defer conn.Close()
 
 	reader := bufio.NewReader(os.Stdin)
-	result, err := pairing.Initiate(ctx, conn.ProtocolConn(), pairing.InitiatorOptions{
+	result, err := pairing.Initiate(ctx, conn.ProtocolConn(), models.InitiatorOptions{
 		DeviceName:   localDeviceName(),
 		Capabilities: []uint64{},
 	}, func(code uint32, remoteName string) (bool, error) {
@@ -167,7 +168,7 @@ func cmdPing(args []string) {
 	defer conn.Close()
 
 	reader := bufio.NewReader(os.Stdin)
-	if _, err := pairing.Initiate(ctx, conn.ProtocolConn(), pairing.InitiatorOptions{DeviceName: localDeviceName()}, func(code uint32, remoteName string) (bool, error) {
+	if _, err := pairing.Initiate(ctx, conn.ProtocolConn(), models.InitiatorOptions{DeviceName: localDeviceName()}, func(code uint32, remoteName string) (bool, error) {
 		fmt.Printf("Pairing code for %s: %03d %03d\n", remoteName, code/1000, code%1000)
 		fmt.Print("Confirm pairing? [y/N]: ")
 		line, err := reader.ReadString('\n')

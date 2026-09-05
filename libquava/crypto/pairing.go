@@ -8,29 +8,20 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"libquava/models"
 
 	"golang.org/x/crypto/chacha20poly1305"
 	"golang.org/x/crypto/hkdf"
 )
 
-const (
-	ProtocolName        = "quava-pairing"
-	ProtocolVersionInfo = "quava-pairing-v1"
-)
-
-// Identity contains the long-term Ed25519 identity key pair.
-type Identity struct {
-	PrivateKey ed25519.PrivateKey
-	PublicKey  ed25519.PublicKey
-}
 
 // GenerateIdentityKeyPair creates a fresh Ed25519 identity key pair.
-func GenerateIdentityKeyPair() (Identity, error) {
+func GenerateIdentityKeyPair() (models.Identity, error) {
 	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
-		return Identity{}, fmt.Errorf("generate ed25519 identity: %w", err)
+		return models.Identity{}, fmt.Errorf("generate ed25519 identity: %w", err)
 	}
-	return Identity{PrivateKey: privateKey, PublicKey: publicKey}, nil
+	return models.Identity{PrivateKey: privateKey, PublicKey: publicKey}, nil
 }
 
 // DeviceIDFromPublicKey derives the canonical 16-byte device identifier.
@@ -140,8 +131,8 @@ func VerifyTranscript(publicKey ed25519.PublicKey, transcript, signature []byte)
 
 // TranscriptBytes builds the transcript used for authentication and verification.
 func TranscriptBytes(selectedVersion uint64, transactionID []byte, initiatorDeviceID, responderDeviceID, initiatorPublicKey, responderPublicKey, initiatorNonce, responderNonce, initiatorEphemeralPublic, responderEphemeralPublic []byte) []byte {
-	transcript := make([]byte, 0, len(ProtocolName)+len(transactionID)+len(initiatorDeviceID)+len(responderDeviceID)+len(initiatorPublicKey)+len(responderPublicKey)+len(initiatorNonce)+len(responderNonce)+len(initiatorEphemeralPublic)+len(responderEphemeralPublic)+8)
-	transcript = append(transcript, []byte(ProtocolName)...)
+	transcript := make([]byte, 0, len(models.ProtocolName)+len(transactionID)+len(initiatorDeviceID)+len(responderDeviceID)+len(initiatorPublicKey)+len(responderPublicKey)+len(initiatorNonce)+len(responderNonce)+len(initiatorEphemeralPublic)+len(responderEphemeralPublic)+8)
+	transcript = append(transcript, []byte(models.ProtocolName)...)
 	transcript = append(transcript, byte(selectedVersion>>56), byte(selectedVersion>>48), byte(selectedVersion>>40), byte(selectedVersion>>32), byte(selectedVersion>>24), byte(selectedVersion>>16), byte(selectedVersion>>8), byte(selectedVersion))
 	transcript = append(transcript, transactionID...)
 	transcript = append(transcript, initiatorDeviceID...)
@@ -161,7 +152,7 @@ func MasterSecret(initiatorNonce, responderNonce, sharedSecret []byte) ([]byte, 
 	saltInput = append(saltInput, initiatorNonce...)
 	saltInput = append(saltInput, responderNonce...)
 	salt := sha256.Sum256(saltInput)
-	return HKDFSHA256(salt[:], sharedSecret, []byte(ProtocolVersionInfo), 32)
+	return HKDFSHA256(salt[:], sharedSecret, []byte(models.ProtocolVersionInfo), 32)
 }
 
 // PeerCredential derives the persistent peer credential from the master secret.
