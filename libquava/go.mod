@@ -1,0 +1,14 @@
+module libquava
+
+go 1.27rc2
+
+require (
+	github.com/fxamacker/cbor/v2 v2.9.0
+	github.com/google/uuid v1.6.0
+	golang.org/x/crypto v0.39.0
+)
+
+require (
+	github.com/x448/float16 v0.8.4 // indirect
+	golang.org/x/sys v0.33.0 // indirect
+)
