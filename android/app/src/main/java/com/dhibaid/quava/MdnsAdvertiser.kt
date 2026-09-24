@@ -20,7 +20,7 @@ class MdnsAdvertiser(private val context: Context) {
 
         val info = NsdServiceInfo().apply {
             serviceName = instanceName
-            serviceType = "_quava._udp." // NsdManager appends ".local."
+            serviceType = "_quava._udp."
             setPort(port)
         }
 

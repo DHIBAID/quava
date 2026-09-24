@@ -106,7 +106,7 @@ func (c *Client) discover(ctx context.Context, targetName string) ([]Device, err
 			continue
 		}
 
-		for _, rr := range packet.Answers {
+		for _, rr := range append(packet.Answers, packet.Additional...) {
 			switch rr.Type {
 			case models.TypeA:
 				address, err := ParseARecord(rr)
@@ -124,7 +124,7 @@ func (c *Client) discover(ctx context.Context, targetName string) ([]Device, err
 					}
 				}
 			case models.TypePTR:
-				ptr, err := ParsePTRRecord(rr)
+				ptr, err := ParsePTRRecord(buf[:n], rr)
 				if err != nil || !strings.HasSuffix(ptr.Target, "._quava._udp.local.") {
 					continue
 				}
@@ -135,7 +135,7 @@ func (c *Client) discover(ctx context.Context, targetName string) ([]Device, err
 					}
 				}
 			case models.TypeSRV:
-				srv, err := ParseSRVRecord(rr)
+				srv, err := ParseSRVRecord(buf[:n], rr)
 				if err != nil || !strings.HasSuffix(srv.Name, "._quava._udp.local.") {
 					continue
 				}

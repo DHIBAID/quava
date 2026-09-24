@@ -4,12 +4,9 @@ import (
 	"encoding/binary"
 	"fmt"
 	"strings"
-	
+
 	"libquava/models"
 )
-
-
-
 
 // ParseHeader decodes a DNS header from data.
 func ParseHeader(data []byte) (models.Header, error) {
@@ -75,10 +72,11 @@ func ParsePacket(data []byte) (*models.Packet, error) {
 	}
 
 	for i := 0; i < int(header.ARCount); i++ {
-		_, next, err := parseResourceRecord(data, offset)
+		rr, next, err := parseResourceRecord(data, offset)
 		if err != nil {
 			return nil, err
 		}
+		packet.Additional = append(packet.Additional, rr)
 		offset = next
 	}
 
@@ -192,7 +190,7 @@ func parseResourceRecord(data []byte, offset int) (models.ResourceRecord, int, e
 		return models.ResourceRecord{}, 0, fmt.Errorf("dns: resource record too large")
 	}
 	payload := append([]byte(nil), data[next+10:next+10+rdlength]...)
-	return models.ResourceRecord{Name: name, Type: rtype, Class: clazz, TTL: ttl, Data: payload}, next + 10 + rdlength, nil
+	return models.ResourceRecord{Name: name, Type: rtype, Class: clazz, TTL: ttl, Data: payload, DataOffset: next + 10}, next + 10 + rdlength, nil
 }
 
 // EncodeQuestion encodes a single DNS question.
@@ -212,11 +210,11 @@ func BuildPTRQuery(name string) ([]byte, error) {
 }
 
 // ParsePTRRecord decodes a PTR record's payload.
-func ParsePTRRecord(rr models.ResourceRecord) (models.PTRRecord, error) {
+func ParsePTRRecord(data []byte, rr models.ResourceRecord) (models.PTRRecord, error) {
 	if rr.Type != models.TypePTR {
 		return models.PTRRecord{}, fmt.Errorf("dns: expected PTR record, got type %d", rr.Type)
 	}
-	name, _, err := DecodeDNSName(rr.Data, 0)
+	name, _, err := DecodeDNSName(data, rr.DataOffset)
 	if err != nil {
 		return models.PTRRecord{}, err
 	}
@@ -224,7 +222,7 @@ func ParsePTRRecord(rr models.ResourceRecord) (models.PTRRecord, error) {
 }
 
 // ParseSRVRecord decodes an SRV record's payload.
-func ParseSRVRecord(rr models.ResourceRecord) (models.SRVRecord, error) {
+func ParseSRVRecord(data []byte, rr models.ResourceRecord) (models.SRVRecord, error) {
 	if rr.Type != models.TypeSRV {
 		return models.SRVRecord{}, fmt.Errorf("dns: expected SRV record, got type %d", rr.Type)
 	}
@@ -235,7 +233,7 @@ func ParseSRVRecord(rr models.ResourceRecord) (models.SRVRecord, error) {
 	priority := binary.BigEndian.Uint16(rr.Data[0:2])
 	weight := binary.BigEndian.Uint16(rr.Data[2:4])
 	port := int(binary.BigEndian.Uint16(rr.Data[4:6]))
-	target, _, err := DecodeDNSName(rr.Data, 6)
+	target, _, err := DecodeDNSName(data, rr.DataOffset+6)
 	if err != nil {
 		return models.SRVRecord{}, err
 	}

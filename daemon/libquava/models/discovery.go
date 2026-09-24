@@ -26,18 +26,20 @@ type Question struct {
 
 // ResourceRecord is a minimal DNS resource record.
 type ResourceRecord struct {
-	Name  string
-	Type  uint16
-	Class uint16
-	TTL   uint32
-	Data  []byte
+	Name       string
+	Type       uint16
+	Class      uint16
+	TTL        uint32
+	Data       []byte
+	DataOffset int
 }
 
 // Packet is a minimal DNS packet representation for the prototype.
 type Packet struct {
-	Header    Header
-	Questions []Question
-	Answers   []ResourceRecord
+	Header     Header
+	Questions  []Question
+	Answers    []ResourceRecord
+	Additional []ResourceRecord
 }
 
 // PTRRecord stores the minimal payload of a DNS PTR record.
