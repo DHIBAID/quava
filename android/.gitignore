@@ -1,0 +1,48 @@
+# Gradle
+.gradle/
+build/
+!gradle/wrapper/gradle-wrapper.jar
+!**/src/**/build/
+
+# Local machine config (contains your SDK path)
+local.properties
+
+# Android Studio / IntelliJ (in case you ever open it again)
+.idea/
+*.iml
+.navigation/
+captures/
+.externalNativeBuild/
+.cxx/
+
+# Generated outputs
+*.apk
+*.aab
+*.ap_
+*.dex
+output-metadata.json
+
+# Signing material: NEVER commit these
+*.jks
+*.keystore
+keystore.properties
+signing.properties
+
+# Kotlin
+.kotlin/
+
+# Logs and crash dumps
+*.log
+hs_err_pid*
+captures/
+
+# OS junk
+.DS_Store
+Thumbs.db
+
+# VS Code: ignore everything except shared config
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/extensions.json
+!.vscode/launch.json
