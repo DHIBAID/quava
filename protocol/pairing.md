@@ -1355,3 +1355,94 @@ The fundamental security relationship is:
 ```
 
 No step should be skipped.
+
+# 52. Runtime Session Protocol
+
+Pairing establishes durable trust. Runtime communication uses a separate authenticated
+session handshake and does not repeat pairing.
+
+## 52.1 Message Types
+
+```text
+0x10  SESSION_HELLO
+0x11  SESSION_CHALLENGE
+0x12  SESSION_AUTHENTICATE
+0x13  SESSION_READY
+```
+
+Existing runtime control messages remain:
+
+```text
+0x20  PING
+0x21  PONG
+```
+
+## 52.2 Session Handshake
+
+The initiator creates a fresh 16-byte transaction ID and 32-byte nonce and sends:
+
+```text
+SESSION_HELLO
+0: initiator device ID
+1: initiator Ed25519 public key
+2: initiator nonce
+3: protocol version
+```
+
+The responder verifies that the presented public key and device ID match an existing
+trust record. It creates a fresh nonce and responds:
+
+```text
+SESSION_CHALLENGE
+0: responder device ID
+1: responder Ed25519 public key
+2: responder nonce
+3: HMAC-SHA256(peer credential, "challenge" || transcript)
+```
+
+The initiator verifies the responder's identity and challenge MAC, then sends:
+
+```text
+SESSION_AUTHENTICATE
+0: HMAC-SHA256(peer credential, "authenticate" || transcript)
+```
+
+The responder verifies the MAC and sends:
+
+```text
+SESSION_READY
+0: HMAC-SHA256(peer credential, "ready" || transcript)
+```
+
+The canonical session transcript is:
+
+```text
+"quava-session"
+|| transaction_id
+|| initiator_device_id
+|| responder_device_id
+|| initiator_public_key
+|| responder_public_key
+|| initiator_nonce
+|| responder_nonce
+```
+
+The pairing credential is never sent over the wire.
+
+## 52.3 Runtime Lifetime
+
+A successful handshake creates a long-lived runtime session. Either peer may close the
+transport at any time. Closing a session does not revoke pairing trust.
+
+An active session uses periodic `PING` / `PONG` traffic. The Android implementation uses
+a 20-second heartbeat interval while an authenticated session is active.
+
+If a heartbeat fails, the runtime session is considered disconnected. The persistent trust
+record remains valid and a later connection may perform the session handshake again.
+
+## 52.4 Security Boundary
+
+The current runtime handshake provides peer authentication and replay-resistant fresh
+handshake transcripts. Runtime application payload encryption is intentionally a separate
+layer and must be added before sensitive application data such as filesystem contents,
+terminal input, or screen frames are sent over the session.

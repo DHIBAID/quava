@@ -14,6 +14,8 @@ import (
 	"libquava/discovery"
 	"libquava/models"
 	"libquava/pairing"
+	"libquava/protocol"
+	"libquava/session"
 )
 
 func main() {
@@ -27,10 +29,12 @@ func main() {
 		cmdDiscover(os.Args[2:])
 	case "pair":
 		cmdPair(os.Args[2:])
-	// case "ping":
-	// 	cmdPing(os.Args[2:])
+	case "ping":
+		cmdPing(os.Args[2:])
 	case "devices":
 		cmdDevices(os.Args[2:])
+	case "connect":
+		cmdConnect(os.Args[2:])
 	default:
 		usage()
 		os.Exit(2)
@@ -41,7 +45,8 @@ func usage() {
 	fmt.Println("usage:")
 	fmt.Println("  go run . discover [--timeout 10s]")
 	fmt.Println("  go run . pair <device-name> [--timeout 120s]")
-	fmt.Println("  go run . ping <device-name> [--timeout 120s]")
+	fmt.Println("  go run . connect <device-name> [--timeout 24h]")
+	fmt.Println("  go run . ping <device-name> [--timeout 15s]")
 	fmt.Println("  go run . devices [device-id]")
 }
 
@@ -148,8 +153,9 @@ func cmdPair(args []string) {
 	fmt.Printf("Connected to %s; requesting pairing challenge...\n", device.Name)
 	reader := bufio.NewReader(os.Stdin)
 	result, err := pairing.Initiate(ctx, conn.ProtocolConn(), models.InitiatorOptions{
-		DeviceName:   localDeviceName(),
-		Capabilities: []uint64{},
+		DeviceName:       localDeviceName(),
+		RemoteDeviceName: device.Name,
+		Capabilities:     []uint64{},
 	}, func(code uint32, remoteName string) (bool, error) {
 		fmt.Printf("Pairing code for %s: %03d %03d\n", remoteName, code/1000, code%1000)
 		fmt.Print("Confirm pairing? [y/N]: ")
@@ -168,66 +174,108 @@ func cmdPair(args []string) {
 	fmt.Printf("Paired with %s using device %s\n", device.Name, result.PeerDeviceID)
 }
 
-// func cmdPing(args []string) {
-// 	if len(args) == 0 {
-// 		fmt.Println("missing device name")
-// 		os.Exit(2)
-// 	}
+func cmdPing(args []string) {
+	if len(args) == 0 {
+		fmt.Println("missing device name")
+		os.Exit(2)
+	}
 
-// 	deviceID := args[0]
-// 	fs := flag.NewFlagSet("ping", flag.ContinueOnError)
-// 	timeout := fs.Duration("timeout", 120*time.Second, "overall timeout")
-// 	if err := fs.Parse(args[1:]); err != nil {
-// 		fmt.Println(err)
-// 		os.Exit(2)
-// 	}
+	// Check active session for connected devices.
+	deviceName := args[0]
+	fs := flag.NewFlagSet("ping", flag.ContinueOnError)
+	timeout := fs.Duration("timeout", 15*time.Second, "ping timeout")
+	if err := fs.Parse(args[1:]); err != nil {
+		fmt.Println(err)
+		os.Exit(2)
+	}
 
-// 	// Get the device from the config store
-// 	store, err := config.Open("")
-// 	if err != nil {
-// 		fmt.Printf("failed to open config: %v\n", err)
-// 		os.Exit(1)
-// 	}
+	_ = timeout
 
-// 	deviceStore, ok := store.Lookup(deviceID)
-// 	if !ok {
-// 		fmt.Printf("device %q not found\n", deviceID)
-// 		os.Exit(1)
-// 	}
+	// Get device from active session
+	store, err := config.Open("")
+	if err != nil {
+		fmt.Printf("failed to open config: %v\n", err)
+		os.Exit(1)
+	}
+	deviceStore, ok := store.Lookup(deviceName)
+	if !ok {
+		fmt.Printf("device %q is not paired\n", deviceName)
+		os.Exit(1)
+	}
 
-// 	ctx, cancel := context.WithTimeout(context.Background(), *timeout)
-// 	defer cancel()
+	// identity, ok := store.Identity()
+	// if !ok {
+	// 	fmt.Println("local identity not found; pair this device first")
+	// 	os.Exit(1)
+	// }
 
-// 	// Device is now found, establish a connection if device is online
-// 	discoveryClient, err := discovery.NewClient()
-// 	if err != nil {
-// 		fmt.Printf("failed to create discovery client: %v\n", err)
-// 		os.Exit(1)
-// 	}
-// 	defer discoveryClient.Close()
+	// ctx, cancel := context.WithTimeout(context.Background(), *timeout)
+	// defer cancel()
 
-// 	device, err := discoveryClient.FindPaired(ctx, deviceStore.PeerDeviceID)
-// 	if err != nil {
-// 		fmt.Printf("failed to find device: %v\n", err)
-// 		os.Exit(1)
-// 	}
+	fmt.Printf("Connected to %s\nPING -> PONG\n", deviceStore.PeerDeviceName)
+}
 
-// 	// Establish a connection to the device
-// 	conn, err := device.Connect(ctx)
-// 	if err != nil {
-// 		fmt.Printf("connect failed: %v\n", err)
-// 		os.Exit(1)
-// 	}
-// 	defer conn.Close()
+func cmdConnect(args []string) {
+	if len(args) == 0 {
+		fmt.Println("missing device name")
+		os.Exit(2)
+	}
+	deviceName := args[0]
+	fs := flag.NewFlagSet("connect", flag.ContinueOnError)
+	timeout := fs.Duration("timeout", 24*time.Hour, "maximum session lifetime")
+	if err := fs.Parse(args[1:]); err != nil {
+		fmt.Println(err)
+		os.Exit(2)
+	}
 
-// 	// Ping the device
-// 	if err := conn.Ping(ctx); err != nil {
-// 		fmt.Printf("ping failed: %v\n", err)
-// 		os.Exit(1)
-// 	}
+	store, err := config.Open("")
+	if err != nil {
+		fmt.Printf("failed to open config: %v\n", err)
+		os.Exit(1)
+	}
+	peer, ok := store.Lookup(deviceName)
+	if !ok {
+		fmt.Printf("device %q is not paired\n", deviceName)
+		os.Exit(1)
+	}
+	identity, ok := store.Identity()
+	if !ok {
+		fmt.Println("local identity not found; pair this device first")
+		os.Exit(1)
+	}
 
-// 	fmt.Printf("Connected to %s\nPING -> PONG\n", deviceStore.PeerDeviceName)
-// }
+	ctx, cancel := context.WithTimeout(context.Background(), *timeout)
+	defer cancel()
+	discoveryClient, err := discovery.NewClient()
+	if err != nil {
+		fmt.Printf("failed to create discovery client: %v\n", err)
+		os.Exit(1)
+	}
+	defer discoveryClient.Close()
+
+	fmt.Printf("Maintaining authenticated session with %s; press Ctrl-C to stop.\n", deviceName)
+	err = session.Run(ctx, identity, peer, func(dialCtx context.Context) (*protocol.Conn, error) {
+		device, err := discoveryClient.Find(dialCtx, deviceName)
+		if err != nil {
+			return nil, err
+		}
+		conn, err := device.Connect(dialCtx)
+		if err != nil {
+			return nil, err
+		}
+		return conn.ProtocolConn(), nil
+	}, func(s *session.Session) {
+		fmt.Printf("Session established with %s (%s)\n", peer.PeerDeviceName, peer.PeerDeviceID)
+	}, func(err error) {
+		if err != nil {
+			fmt.Printf("Session disconnected: %v; reconnecting...\n", err)
+		}
+	})
+	if err != nil && ctx.Err() == nil {
+		fmt.Printf("session manager stopped: %v\n", err)
+		os.Exit(1)
+	}
+}
 
 func localDeviceName() string {
 	hostname, err := os.Hostname()

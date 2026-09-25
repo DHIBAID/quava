@@ -30,7 +30,7 @@ class QuavaService : Service() {
         )
         val notif = NotificationCompat.Builder(this, CHANNEL)
             .setContentTitle("Quava")
-            .setContentText("Listening for pairing requests")
+            .setContentText("Listening for connections")
             .setSmallIcon(android.R.drawable.stat_sys_data_bluetooth)
             .setOngoing(true)
             .build()
@@ -41,6 +41,31 @@ class QuavaService : Service() {
         if (server.start(PORT)) mdns.start(PORT)
     }
 
+    public fun onConnected(peerName: String) {
+        // update contents of the notification to indicate that we are connected to a peer
+        val notif = NotificationCompat.Builder(this, CHANNEL)
+            .setContentTitle("Quava")
+            .setContentText("Connected to $peerName")
+            .setSmallIcon(android.R.drawable.stat_sys_data_bluetooth)
+            .setOngoing(true)
+            .build()
+        val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        nm.notify(1, notif)
+    }
+
+    
+    public fun onDisconnected() {
+        // update contents of the notification to indicate that we are connected to a peer
+        val notif = NotificationCompat.Builder(this, CHANNEL)
+            .setContentTitle("Quava")
+            .setContentText("Listening for connections")
+            .setSmallIcon(android.R.drawable.stat_sys_data_bluetooth)
+            .setOngoing(true)
+            .build()
+        val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        nm.notify(1, notif)
+    }
+    
     override fun onDestroy() {
         mdns.stop()
         server.stop()

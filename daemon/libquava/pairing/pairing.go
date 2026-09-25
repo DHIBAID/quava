@@ -98,7 +98,11 @@ func Initiate(ctx context.Context, conn *protocol.Conn, options models.Initiator
 		return nil, fmt.Errorf("pairing: verification code mismatch")
 	}
 
-	confirmCode, err := confirm(uint32(verificationCode), hex.EncodeToString(responderDeviceID))
+	remoteName := options.RemoteDeviceName
+	if strings.TrimSpace(remoteName) == "" {
+		remoteName = hex.EncodeToString(responderDeviceID)
+	}
+	confirmCode, err := confirm(uint32(verificationCode), remoteName)
 	if err != nil {
 		return nil, err
 	}
@@ -169,7 +173,7 @@ func Initiate(ctx context.Context, conn *protocol.Conn, options models.Initiator
 	result := &models.PairResult{
 		PeerDeviceID:      hex.EncodeToString(responderDeviceID),
 		PeerPublicKey:     append([]byte(nil), responderPublicKey...),
-		PeerDeviceName:    hex.EncodeToString(responderDeviceID),
+		PeerDeviceName:    remoteName,
 		ProtocolVersion:   selectedVersion,
 		Permissions:       append([]uint64(nil), options.Capabilities...),
 		PeerCredential:    peerCredential,

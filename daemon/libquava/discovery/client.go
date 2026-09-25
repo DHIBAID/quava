@@ -267,7 +267,7 @@ func deviceListFromMaps(devicesByKey map[string]Device) []Device {
 // 		if err != nil {
 // 			continue
 // 		}
-		
+
 // 		for _, rr := range append(packet.Answers, packet.Additional...) {
 // 			switch rr.Type {
 // 			case models.TypeA:

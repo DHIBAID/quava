@@ -16,18 +16,23 @@ import (
 const DefaultMaxFrameSize = 64 * 1024
 
 const (
-	ProtocolName    = "quava-pairing"
-	ProtocolVersion = 1
+	ProtocolName        = "quava-pairing"
+	SessionProtocolName = "quava-session"
+	ProtocolVersion     = 1
 
-	MessageTypePairRequest      = 0x01
-	MessageTypePairChallenge    = 0x02
-	MessageTypePairAuthenticate = 0x03
-	MessageTypePairConfirm      = 0x04
-	MessageTypePairComplete     = 0x05
-	MessageTypePairReject       = 0x06
-	MessageTypePairCancel       = 0x07
-	MessageTypePing             = 0x20
-	MessageTypePong             = 0x21
+	MessageTypePairRequest         = 0x01
+	MessageTypePairChallenge       = 0x02
+	MessageTypePairAuthenticate    = 0x03
+	MessageTypePairConfirm         = 0x04
+	MessageTypePairComplete        = 0x05
+	MessageTypePairReject          = 0x06
+	MessageTypePairCancel          = 0x07
+	MessageTypeSessionHello        = 0x10
+	MessageTypeSessionChallenge    = 0x11
+	MessageTypeSessionAuthenticate = 0x12
+	MessageTypeSessionReady        = 0x13
+	MessageTypePing                = 0x20
+	MessageTypePong                = 0x21
 
 	ReasonUserRejected         = 0x01
 	ReasonAuthenticationFailed = 0x02

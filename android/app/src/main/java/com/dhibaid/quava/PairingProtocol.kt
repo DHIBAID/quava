@@ -66,12 +66,19 @@ class PairingProtocol(private val appContext: Context) {
         }
     }
 
+    internal fun readInitial(socket: Socket): Message {
+        socket.soTimeout = PAIRING_TIMEOUT_MS
+        return readMessage(DataInputStream(socket.getInputStream()))
+    }
+
     /** Reads PAIR_REQUEST and sends PAIR_CHALLENGE before asking the user. */
-    fun begin(socket: Socket, onChallenge: (String, Int, Session) -> Unit): Session {
+    fun begin(socket: Socket, onChallenge: (String, Int, Session) -> Unit): Session =
+        begin(socket, readInitial(socket), onChallenge)
+
+    internal fun begin(socket: Socket, request: Message, onChallenge: (String, Int, Session) -> Unit): Session {
         socket.soTimeout = PAIRING_TIMEOUT_MS
         val input = DataInputStream(socket.getInputStream())
         val output = DataOutputStream(socket.getOutputStream())
-        val request = readMessage(input)
         requireMessage(request, PAIR_REQUEST)
 
         val initiatorDeviceId = request.bytes(0, DEVICE_ID_BYTES)
@@ -151,8 +158,67 @@ class PairingProtocol(private val appContext: Context) {
                 2 to sign(transcript),
             ),
         ))
-        IdentityStore(appContext, provider).persistPeer(session.initiatorDeviceId, session.initiatorPublicKey)
+        val peerCredential = hkdfSha256(
+            sha256(session.initiatorNonce + session.responderNonce),
+            sharedSecret,
+            "quava-pairing-v1".encodeToByteArray(),
+            32,
+        ).let { master ->
+            hkdfSha256(sha256(session.request.transactionId), master, "quava-peer-credential-v1".encodeToByteArray(), 32)
+        }
+        IdentityStore(appContext, provider).persistPeer(session.initiatorDeviceId, session.initiatorPublicKey, peerCredential)
     }
+
+    internal data class RuntimeSession(
+        internal val socket: Socket,
+        internal val input: DataInputStream,
+        internal val output: DataOutputStream,
+        internal val transactionId: ByteArray,
+        internal val peerDeviceId: ByteArray,
+        internal val peerName: String,
+    ) {
+        fun close() = runCatching { socket.close() }
+    }
+
+    internal fun beginSession(socket: Socket, hello: Message): RuntimeSession {
+        requireMatchingMessage(hello, SESSION_HELLO, hello.transactionId)
+        val peerId = hello.bytes(0, DEVICE_ID_BYTES)
+        val peerPublic = hello.bytes(1, ED25519_PUBLIC_KEY_BYTES)
+        val peerNonce = hello.bytes(2, NONCE_BYTES)
+        require(peerId.contentEquals(deviceId(peerPublic))) { "session peer device ID does not match public key" }
+        val trusted = IdentityStore(appContext, provider).loadPeer(peerId) ?: error("unknown peer; pairing required")
+        require(trusted.publicKey.contentEquals(peerPublic)) { "session peer identity conflict" }
+        val localId = deviceId(identity.publicRaw)
+        val localNonce = randomBytes(NONCE_BYTES)
+        val transcript = sessionTranscript(hello.transactionId, peerId, localId, peerPublic, identity.publicRaw, peerNonce, localNonce)
+        val output = DataOutputStream(socket.getOutputStream())
+        val input = DataInputStream(socket.getInputStream())
+        writeMessage(output, Message(SESSION_CHALLENGE, hello.transactionId, mapOf(
+            0 to localId, 1 to identity.publicRaw, 2 to localNonce, 3 to hmacSha256(trusted.credential, "challenge".encodeToByteArray() + transcript)
+        )))
+        val auth = readMessage(input)
+        requireMatchingMessage(auth, SESSION_AUTHENTICATE, hello.transactionId)
+        val authMac = auth.bytes(0, HMAC_BYTES)
+        require(authMac.contentEquals(hmacSha256(trusted.credential, "authenticate".encodeToByteArray() + transcript))) { "session authentication failed" }
+        writeMessage(output, Message(SESSION_READY, hello.transactionId, mapOf(
+            0 to hmacSha256(trusted.credential, "ready".encodeToByteArray() + transcript)
+        )))
+        val peerName = socket.inetAddress.hostAddress ?: "Quava peer"
+        return RuntimeSession(socket, input, output, hello.transactionId, peerId, peerName)
+    }
+
+    internal fun runSession(session: RuntimeSession) {
+        while (!session.socket.isClosed) {
+            val message = readMessage(session.input)
+            when (message.type) {
+                PING -> writeMessage(session.output, Message(PONG, message.transactionId, emptyMap()))
+                else -> error("unexpected session message ${message.type}")
+            }
+        }
+    }
+
+    private fun sessionTranscript(txId: ByteArray, initiatorId: ByteArray, responderId: ByteArray, initiatorPublic: ByteArray, responderPublic: ByteArray, initiatorNonce: ByteArray, responderNonce: ByteArray): ByteArray =
+        "quava-session".encodeToByteArray() + txId + initiatorId + responderId + initiatorPublic + responderPublic + initiatorNonce + responderNonce
 
     private data class Identity(val privateKey: PrivateKey, val publicRaw: ByteArray)
 
@@ -177,15 +243,25 @@ class PairingProtocol(private val appContext: Context) {
             return Identity(pair.private, publicRaw)
         }
 
-        fun persistPeer(deviceId: ByteArray, publicKey: ByteArray) {
+        data class TrustedPeer(val publicKey: ByteArray, val credential: ByteArray)
+
+        fun persistPeer(deviceId: ByteArray, publicKey: ByteArray, credential: ByteArray) {
             val id = Base64.encodeToString(deviceId, Base64.NO_WRAP)
             check(prefs.edit()
                 .putString("peer-$id", Base64.encodeToString(publicKey, Base64.NO_WRAP))
+                .putString("peer-credential-$id", Base64.encodeToString(credential, Base64.NO_WRAP))
                 .commit()) { "could not persist trusted peer" }
+        }
+
+        fun loadPeer(deviceId: ByteArray): TrustedPeer? {
+            val id = Base64.encodeToString(deviceId, Base64.NO_WRAP)
+            val publicKey = prefs.getString("peer-$id", null) ?: return null
+            val credential = prefs.getString("peer-credential-$id", null) ?: return null
+            return TrustedPeer(Base64.decode(publicKey, Base64.NO_WRAP), Base64.decode(credential, Base64.NO_WRAP))
         }
     }
 
-    internal data class Message(val type: Long, val transactionId: ByteArray, val payload: Map<Int, Any?>)
+    internal data class Message(val type: Long, val transactionId: ByteArray, val payload: Map<Int, Any?>, val version: Long = PROTOCOL_VERSION)
 
     private fun readMessage(input: DataInputStream): Message {
         val size = input.readInt()
@@ -205,7 +281,7 @@ class PairingProtocol(private val appContext: Context) {
         for (key in payloadObject.keys) {
             payload[key.AsInt32Value()] = payloadObject[key].toValue()
         }
-        return Message(type, transactionId, payload)
+        return Message(type, transactionId, payload, version)
     }
 
     private fun writeMessage(output: DataOutputStream, message: Message) {
@@ -308,11 +384,17 @@ class PairingProtocol(private val appContext: Context) {
 
     companion object {
         private const val PROTOCOL_VERSION = 1L
-        private const val PAIR_REQUEST = 0x01L
+        internal const val PAIR_REQUEST = 0x01L
         private const val PAIR_CHALLENGE = 0x02L
         private const val PAIR_AUTHENTICATE = 0x03L
         private const val PAIR_CONFIRM = 0x04L
         private const val PAIR_COMPLETE = 0x05L
+        internal const val SESSION_HELLO = 0x10L
+        private const val SESSION_CHALLENGE = 0x11L
+        private const val SESSION_AUTHENTICATE = 0x12L
+        private const val SESSION_READY = 0x13L
+        private const val PING = 0x20L
+        private const val PONG = 0x21L
         private const val MAX_FRAME_BYTES = 64 * 1024
         private const val PAIRING_TIMEOUT_MS = 120_000
         private const val TRANSACTION_ID_BYTES = 16
@@ -321,6 +403,7 @@ class PairingProtocol(private val appContext: Context) {
         private const val ED25519_PUBLIC_KEY_BYTES = 32
         private const val ED25519_SIGNATURE_BYTES = 64
         private const val X25519_KEY_BYTES = 32
+        private const val HMAC_BYTES = 32
         private val ED25519_PREFIX = byteArrayOf(0x30, 0x2a, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70, 0x03, 0x21, 0x00)
         private val X25519_PREFIX = byteArrayOf(0x30, 0x2a, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x6e, 0x03, 0x21, 0x00)
     }
