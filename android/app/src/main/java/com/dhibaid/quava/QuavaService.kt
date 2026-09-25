@@ -36,7 +36,7 @@ class QuavaService : Service() {
             .build()
         startForeground(1, notif)
 
-        server = PairingServer(scope)
+        server = PairingServer(scope, this)
         mdns = MdnsAdvertiser(this)
         if (server.start(PORT)) mdns.start(PORT)
     }

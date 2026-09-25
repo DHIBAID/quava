@@ -36,6 +36,8 @@ android {
 }
 
 dependencies {
+    implementation("com.upokecenter:cbor:4.5.2")
+    implementation("org.bouncycastle:bcprov-jdk18on:1.78.1")
     implementation(platform(libs.androidx.compose.bom))
     implementation(libs.androidx.activity.compose)
     implementation(libs.androidx.compose.material3)

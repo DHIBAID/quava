@@ -14,7 +14,6 @@ import (
 	"golang.org/x/crypto/hkdf"
 )
 
-
 // GenerateIdentityKeyPair creates a fresh Ed25519 identity key pair.
 func GenerateIdentityKeyPair() (models.Identity, error) {
 	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)

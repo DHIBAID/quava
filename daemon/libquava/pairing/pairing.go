@@ -5,15 +5,13 @@ import (
 	"crypto/ed25519"
 	"crypto/hmac"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
-	"sort"
 	"strings"
 	"time"
 
+	"libquava/config"
 	qcrypto "libquava/crypto"
 	"libquava/models"
 	"libquava/protocol"
@@ -188,34 +186,22 @@ func Initiate(ctx context.Context, conn *protocol.Conn, options models.Initiator
 }
 
 func loadOrCreateIdentity(storageDir, deviceName string) (models.IdentityFile, string, error) {
-	if strings.TrimSpace(storageDir) == "" {
-		configDir, err := os.UserConfigDir()
-		if err != nil {
-			return models.IdentityFile{}, "", err
-		}
-		storageDir = filepath.Join(configDir, "quava")
-	}
-	if err := os.MkdirAll(storageDir, 0o755); err != nil {
+	store, err := config.Open(storageDir)
+	if err != nil {
 		return models.IdentityFile{}, "", err
 	}
-
-	identityPath := filepath.Join(storageDir, "identity.json")
-	data, err := os.ReadFile(identityPath)
-	if err == nil {
-		var file models.IdentityFile
-		if err := json.Unmarshal(data, &file); err != nil {
-			return models.IdentityFile{}, "", err
-		}
+	if file, ok := store.Identity(); ok {
 		if len(file.PrivateKey) != ed25519.PrivateKeySize || len(file.PublicKey) != ed25519.PublicKeySize {
 			return models.IdentityFile{}, "", errors.New("pairing: invalid identity file")
 		}
 		if strings.TrimSpace(file.DeviceName) == "" {
 			file.DeviceName = fallbackDeviceName(deviceName)
+			store.SetIdentity(file)
+			if err := store.Save(); err != nil {
+				return models.IdentityFile{}, "", err
+			}
 		}
-		return file, storageDir, nil
-	}
-	if !errors.Is(err, os.ErrNotExist) {
-		return models.IdentityFile{}, "", err
+		return file, store.Dir(), nil
 	}
 
 	identity, err := qcrypto.GenerateIdentityKeyPair()
@@ -227,51 +213,22 @@ func loadOrCreateIdentity(storageDir, deviceName string) (models.IdentityFile, s
 		PrivateKey: identity.PrivateKey,
 		PublicKey:  identity.PublicKey,
 	}
-	if err := saveJSON(identityPath, file); err != nil {
+	store.SetIdentity(file)
+	if err := store.Save(); err != nil {
 		return models.IdentityFile{}, "", err
 	}
-	return file, storageDir, nil
+	return file, store.Dir(), nil
 }
 
 func persistTrust(storageDir string, result models.PairResult) error {
-	if strings.TrimSpace(storageDir) == "" {
-		configDir, err := os.UserConfigDir()
-		if err != nil {
-			return err
-		}
-		storageDir = filepath.Join(configDir, "quava")
-	}
-	if err := os.MkdirAll(storageDir, 0o755); err != nil {
-		return err
-	}
-
-	trustPath := filepath.Join(storageDir, "trust.json")
-	store := models.TrustStore{}
-	data, err := os.ReadFile(trustPath)
-	if err == nil {
-		if err := json.Unmarshal(data, &store); err != nil {
-			return err
-		}
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return err
-	}
-
-	store.Peers = append(store.Peers, result)
-	sort.Slice(store.Peers, func(i, j int) bool {
-		if store.Peers[i].PeerDeviceID == store.Peers[j].PeerDeviceID {
-			return store.Peers[i].PairedAt.Before(store.Peers[j].PairedAt)
-		}
-		return store.Peers[i].PeerDeviceID < store.Peers[j].PeerDeviceID
-	})
-	return saveJSON(trustPath, store)
-}
-
-func saveJSON(path string, value any) error {
-	encoded, err := json.MarshalIndent(value, "", "  ")
+	store, err := config.Open(storageDir)
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, encoded, 0o600)
+	if err := store.UpsertDevice(result); err != nil {
+		return err
+	}
+	return store.Save()
 }
 
 func fallbackDeviceName(deviceName string) string {

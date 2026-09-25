@@ -14,29 +14,29 @@ type InitiatorOptions struct {
 
 // PairResult is persisted after a successful pairing.
 type PairResult struct {
-	PeerDeviceID      string    `json:"peer_device_id"`
-	PeerPublicKey     []byte    `json:"peer_public_key"`
-	PeerDeviceName    string    `json:"peer_device_name"`
-	ProtocolVersion   uint64    `json:"protocol_version"`
-	Permissions       []uint64  `json:"permissions"`
-	PeerCredential    []byte    `json:"peer_credential"`
-	PairedAt          time.Time `json:"paired_at"`
-	VerificationCode  uint32    `json:"verification_code"`
-	SelectedVersion   uint64    `json:"selected_version"`
-	TransactionID     []byte    `json:"transaction_id"`
-	InitiatorDeviceID string    `json:"initiator_device_id"`
+	PeerDeviceID      string    `json:"peer_device_id" yaml:"peer_device_id"`
+	PeerPublicKey     []byte    `json:"peer_public_key" yaml:"peer_public_key"`
+	PeerDeviceName    string    `json:"peer_device_name" yaml:"peer_device_name"`
+	ProtocolVersion   uint64    `json:"protocol_version" yaml:"protocol_version"`
+	Permissions       []uint64  `json:"permissions" yaml:"permissions"`
+	PeerCredential    []byte    `json:"peer_credential" yaml:"peer_credential"`
+	PairedAt          time.Time `json:"paired_at" yaml:"paired_at"`
+	VerificationCode  uint32    `json:"verification_code" yaml:"verification_code"`
+	SelectedVersion   uint64    `json:"selected_version" yaml:"selected_version"`
+	TransactionID     []byte    `json:"transaction_id" yaml:"transaction_id"`
+	InitiatorDeviceID string    `json:"initiator_device_id" yaml:"initiator_device_id"`
 }
 
 // IdentityFile is stored on disk for the long-term device identity.
 type IdentityFile struct {
-	DeviceName string             `json:"device_name"`
-	PrivateKey ed25519.PrivateKey `json:"private_key"`
-	PublicKey  ed25519.PublicKey  `json:"public_key"`
+	DeviceName string             `json:"device_name" yaml:"device_name"`
+	PrivateKey ed25519.PrivateKey `json:"private_key" yaml:"private_key"`
+	PublicKey  ed25519.PublicKey  `json:"public_key" yaml:"public_key"`
 }
 
 // TrustStore persists authenticated peers.
 type TrustStore struct {
-	Peers []PairResult `json:"peers"`
+	Peers []PairResult `json:"peers" yaml:"peers"`
 }
 
 // ConfirmFunc is called after the verification code is displayed.

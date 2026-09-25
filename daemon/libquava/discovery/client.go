@@ -117,7 +117,7 @@ func (c *Client) discover(ctx context.Context, targetName string) ([]Device, err
 				for _, srv := range srvByName {
 					if srv.Target == address.Name {
 						if _, ok := ptrTargets[srv.Name]; ok {
-							if device, added := addDevice(devicesByKey, srv.Name, srv, address.Address); added && targetName != "" && device.Name == targetName && device.Address != "" {
+							if device, added := addDevice(devicesByKey, srv.Name, srv, address.Address); added && targetName != "" && (device.Name == targetName) && device.Address != "" {
 								return []Device{device}, nil
 							}
 						}
@@ -222,6 +222,84 @@ func deviceListFromMaps(devicesByKey map[string]Device) []Device {
 	})
 	return devices
 }
+
+// func (c *Client) FindPaired(ctx context.Context, targetID string) (Device, error) {
+// 	device, err := c.discoverByID(ctx, targetID)
+// 	if err != nil {
+// 		return Device{}, err
+// 	}
+
+// 	return device, nil
+// }
+
+// func (c *Client) discoverByID(ctx context.Context, targetID string) (Device, error) {
+// 	// We already have the device ID, so we can just listen for SRV and A records until we find a matching device.
+// 	if c == nil || c.conn == nil {
+// 		return Device{}, errors.New("discovery: nil client")
+// 	}
+
+// 	srvByName := map[string]models.SRVRecord{}
+// 	addressByHost := map[string]string{}
+// 	devicesByKey := map[string]Device{}
+
+// 	for {
+// 		if ctx.Err() != nil {
+// 			return Device{}, ctx.Err()
+// 		}
+
+// 		if err := c.conn.SetReadDeadline(time.Now().Add(250 * time.Millisecond)); err != nil {
+// 			return Device{}, err
+// 		}
+
+// 		buf := make([]byte, 4096)
+// 		n, _, err := c.conn.ReadFromUDP(buf)
+// 		if err != nil {
+// 			if ne, ok := err.(net.Error); ok && ne.Timeout() {
+// 				continue
+// 			}
+// 			if ctx.Err() != nil {
+// 				return Device{}, ctx.Err()
+// 			}
+// 			return Device{}, err
+// 		}
+
+// 		packet, err := ParsePacket(buf[:n])
+// 		if err != nil {
+// 			continue
+// 		}
+		
+// 		for _, rr := range append(packet.Answers, packet.Additional...) {
+// 			switch rr.Type {
+// 			case models.TypeA:
+// 				address, err := ParseARecord(rr)
+// 				if err != nil {
+// 					continue
+// 				}
+// 				addressByHost[address.Name] = address.Address
+// 				for _, srv := range srvByName {
+// 					if srv.Target == address.Name {
+// 						if device, added := addDevice(devicesByKey, srv.Name, srv, address.Address); added && device.ID == targetID && device.Address != "" {
+// 							return device, nil
+// 						}
+// 					}
+// 				}
+// 			case models.TypeSRV:
+// 				srv, err := ParseSRVRecord(rr)
+// 				if err != nil {
+// 					continue
+// 				}
+// 				srvByName[srv.Name] = srv
+// 				for _, addr := range addressByHost {
+// 					if addr == srv.Target {
+// 						if device, added := addDevice(devicesByKey, srv.Name, srv, addr); added && device.ID == targetID && device.Address != "" {
+// 							return device, nil
+// 						}
+// 					}
+// 				}
+// 			}
+// 		}
+// 	}
+// }
 
 // TODO: This prototype intentionally does not resolve hostnames to IPv4 addresses,
 // and does not implement a full mDNS service cache or packet retry loop.

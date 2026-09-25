@@ -1,12 +1,17 @@
 package com.dhibaid.quava
 
+import android.content.Context
 import android.util.Log
-import kotlinx.coroutines.*
-import kotlinx.coroutines.flow.*
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.launch
 import java.net.InetSocketAddress
 import java.net.ServerSocket
 import java.net.Socket
-import kotlin.random.Random
 
 data class PairingState(
     val status: String = "Ready to advertise and accept pairing requests",
@@ -16,183 +21,122 @@ data class PairingState(
     val confirmationPending: Boolean = false,
 )
 
+/** TCP responder for the Quava pairing protocol. */
 class PairingServer(
     private val scope: CoroutineScope,
-    private val proxyHost: String = "127.0.0.1",
-    private val proxyPort: Int = 48273,
+    context: Context,
 ) {
+    private val protocol = PairingProtocol(context.applicationContext)
     private val _state = MutableStateFlow(PairingState())
     val state: StateFlow<PairingState> = _state.asStateFlow()
 
     private var serverSocket: ServerSocket? = null
-    private var pendingSocket: Socket? = null
+    private var activeSession: PairingProtocol.Session? = null
     private val lock = Any()
 
-    fun start(port: Int): Boolean {
-        return try {
-            val ss = ServerSocket()
+    fun start(port: Int): Boolean = try {
+        ServerSocket().also { ss ->
             ss.reuseAddress = true
-            ss.bind(InetSocketAddress(port)) // all IPv4 interfaces
+            ss.bind(InetSocketAddress(port))
             serverSocket = ss
             update { it.copy(status = "Listening on port ${ss.localPort}, waiting for pairing") }
             scope.launch(Dispatchers.IO) { acceptLoop(ss) }
-            true
-        } catch (e: Exception) {
-            update { it.copy(status = "TCP server failed to listen on $port") }
-            Log.e(TAG, "listen failed", e)
-            false
         }
+        true
+    } catch (e: Exception) {
+        update { it.copy(status = "TCP server failed to listen on $port") }
+        Log.e(TAG, "listen failed", e)
+        false
     }
 
     fun stop() {
-        synchronized(lock) {
-            pendingSocket?.closeQuietly()
-            pendingSocket = null
-        }
+        val session = synchronized(lock) { activeSession.also { activeSession = null } }
+        session?.close()
         serverSocket?.closeQuietly()
         serverSocket = null
     }
 
     private suspend fun acceptLoop(ss: ServerSocket) {
-        while (currentCoroutineContext().isActive && !ss.isClosed) {
-            val sock = try {
+        while (ss.isBound && !ss.isClosed) {
+            val socket = try {
                 ss.accept()
-            } catch (e: Exception) {
+            } catch (_: Exception) {
                 break
             }
-            val accepted = synchronized(lock) {
-                if (pendingSocket != null) {
-                    false // only one pending pairing at a time
-                } else {
-                    pendingSocket = sock
-                    true
-                }
-            }
-            if (!accepted) {
-                sock.closeQuietly()
+            if (synchronized(lock) { activeSession != null }) {
+                socket.closeQuietly()
                 continue
             }
-
-            Log.d(TAG, "new connection from ${sock.inetAddress.hostAddress}:${sock.port}")
-            val code = Random.nextInt(1_000_000)
-            update {
-                it.copy(
-                    pendingPeerName = "${sock.inetAddress.hostAddress}:${sock.port}",
-                    pairingCode = "%03d %03d".format(code / 1000, code % 1000),
-                    confirmationPending = true,
-                    status = "Awaiting user confirmation for pairing",
-                )
-            }
-            watchForDisconnect(sock)
+            scope.launch(Dispatchers.IO) { handle(socket) }
         }
     }
 
-    /** While the user hasn't answered yet, notice if the peer hangs up. */
-    private fun watchForDisconnect(sock: Socket) {
-        scope.launch(Dispatchers.IO) {
-            try {
-                // read() returns -1 on EOF. Peer shouldn't send before confirmation,
-                // but if it does we just wait; data is consumed by the proxy later.
-                sock.soTimeout = 0
-                val probe = sock.getInputStream()
-                while (isActive) {
-                    if (synchronized(lock) { pendingSocket !== sock }) return@launch // decided
-                    if (sock.isClosed || probe.available() < 0) break
-                    delay(300)
-                    // detect a half-closed peer by a zero-length write attempt
-                    try {
-                        sock.getOutputStream().flush()
-                    } catch (_: Exception) {
-                        break
-                    }
+    private fun handle(socket: Socket) {
+        try {
+            val session = protocol.begin(socket) { peerName, code, newSession ->
+                synchronized(lock) {
+                    if (activeSession != null) throw PairingProtocol.BusyException()
+                    activeSession = newSession
                 }
-            } catch (_: Exception) {
+                update {
+                    it.copy(
+                        paired = false,
+                        pendingPeerName = peerName,
+                        pairingCode = "%03d %03d".format(code / 1000, code % 1000),
+                        confirmationPending = true,
+                        status = "Verify the pairing code, then confirm",
+                    )
+                }
             }
-            val stillPending = synchronized(lock) {
-                if (pendingSocket === sock) {
-                    pendingSocket = null; true
-                } else false
+            protocol.complete(session)
+            update {
+                it.copy(
+                    paired = true,
+                    confirmationPending = false,
+                    pairingCode = "",
+                    pendingPeerName = "",
+                    status = "Paired with ${session.peerName}",
+                )
             }
-            if (stillPending) {
-                sock.closeQuietly()
-                resetToReady()
+        } catch (e: PairingProtocol.BusyException) {
+            socket.closeQuietly()
+        } catch (e: Exception) {
+            Log.w(TAG, "pairing failed: ${e.message}", e)
+            update {
+                it.copy(
+                    confirmationPending = false,
+                    pairingCode = "",
+                    pendingPeerName = "",
+                    status = "Pairing failed: ${e.message ?: "connection closed"}",
+                )
             }
+        } finally {
+            synchronized(lock) {
+                if (activeSession?.socket === socket) activeSession = null
+            }
+            socket.closeQuietly()
         }
     }
 
     fun confirmPairing() {
-        val inbound = synchronized(lock) {
-            val s = pendingSocket
-            pendingSocket = null
-            s
-        } ?: return
-
-        update { it.copy(confirmationPending = false, pairingCode = "", pendingPeerName = "") }
-
-        scope.launch(Dispatchers.IO) {
-            val outbound = Socket()
-            try {
-                outbound.connect(InetSocketAddress(proxyHost, proxyPort), 5000)
-                Log.d(TAG, "outbound connected to host responder")
-                update { it.copy(paired = true, status = "Proxying pairing to host responder") }
-
-                // Bidirectional pipe; when either direction ends, close both.
-                coroutineScope {
-                    val a = launch { pipe(inbound, outbound, "inbound->outbound") }
-                    val b = launch { pipe(outbound, inbound, "outbound->inbound") }
-                    select@ while (isActive && (a.isActive && b.isActive)) delay(100)
-                    a.cancel(); b.cancel()
-                }
-            } catch (e: Exception) {
-                Log.w(TAG, "outbound socket error: ${e.message}")
-            } finally {
-                inbound.closeQuietly()
-                outbound.closeQuietly()
-                resetToReady()
-            }
-        }
+        synchronized(lock) { activeSession }?.confirm(true)
     }
 
     fun rejectPairing() {
-        synchronized(lock) {
-            pendingSocket?.closeQuietly()
-            pendingSocket = null
-        }
+        val session = synchronized(lock) { activeSession }
+        session?.confirm(false)
+        // Interrupt a pending socket read if Android rejects before the peer
+        // sends PAIR_AUTHENTICATE.
+        session?.close()
         update {
             it.copy(
-                confirmationPending = false,
                 paired = false,
+                confirmationPending = false,
                 pairingCode = "",
                 pendingPeerName = "",
                 status = "Pairing rejected",
             )
         }
-    }
-
-    private suspend fun pipe(from: Socket, to: Socket, label: String) =
-        withContext(Dispatchers.IO) {
-            val buf = ByteArray(8192)
-            try {
-                val input = from.getInputStream()
-                val output = to.getOutputStream()
-                while (true) {
-                    val n = input.read(buf)
-                    if (n < 0) break
-                    Log.d(TAG, "$label $n bytes")
-                    output.write(buf, 0, n)
-                    output.flush()
-                }
-            } catch (_: Exception) {
-            }
-        }
-
-    private fun resetToReady() = update {
-        it.copy(
-            confirmationPending = false,
-            pairingCode = "",
-            pendingPeerName = "",
-            status = "Ready to advertise and accept pairing requests",
-        )
     }
 
     private inline fun update(block: (PairingState) -> PairingState) = _state.update(block)
