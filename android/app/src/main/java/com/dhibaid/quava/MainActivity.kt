@@ -10,7 +10,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.*
-import com.dhibaid.quava.ui.PairingScreen
+import com.dhibaid.quava.ui.HomeScreen
 
 class MainActivity : ComponentActivity() {
     private var service by mutableStateOf<QuavaService?>(null)
@@ -43,7 +43,7 @@ class MainActivity : ComponentActivity() {
                 }
             }
 
-            service?.let { PairingScreen(it.server) }
+            service?.let { HomeScreen(it.server) }
         }
     }
 

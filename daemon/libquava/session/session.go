@@ -7,6 +7,8 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
+	"log"
+	"os"
 	"time"
 
 	"libquava/crypto"
@@ -100,10 +102,50 @@ func Connect(ctx context.Context, conn *protocol.Conn, identity models.IdentityF
 	if err != nil {
 		return nil, err
 	}
-	if !hmac.Equal(readyMAC, mac(peer.PeerCredential, "ready", transcript)) {
+
+	if !hmac.Equal(
+		readyMAC,
+		mac(peer.PeerCredential, "ready", transcript),
+	) {
 		return nil, errors.New("session: ready authentication failed")
 	}
-	return &Session{conn: conn, peer: peer, localID: localID, localPublic: identity.PublicKey, txID: txID}, nil
+
+	hostname, err := os.Hostname()
+	if err != nil {
+		hostname = "Unknown PC"
+	}
+
+	log.Printf(
+		"SESSION_READY: sending hostname=%q tx=%x",
+		hostname,
+		txID,
+	)
+
+	payload := map[uint64]any{
+		protocol.SessionReadyMAC:      mac(peer.PeerCredential, "ready", transcript),
+		protocol.SessionReadyHostname: hostname,
+	}
+
+	if err := conn.WriteMessage(
+		ctx,
+		protocol.NewMessage(
+			protocol.MessageTypeSessionReady,
+			txID,
+			payload,
+		),
+	); err != nil {
+		return nil, err
+	}
+
+	log.Printf("SESSION_READY: write succeeded")
+
+	return &Session{
+		conn:        conn,
+		peer:        peer,
+		localID:     localID,
+		localPublic: identity.PublicKey,
+		txID:        txID,
+	}, nil
 }
 
 func NewServerSession(ctx context.Context, conn *protocol.Conn, identity models.IdentityFile, peer models.PairResult, first protocol.Message) (*Session, error) {
@@ -159,7 +201,24 @@ func NewServerSession(ctx context.Context, conn *protocol.Conn, identity models.
 	if !hmac.Equal(authMAC, mac(peer.PeerCredential, "authenticate", transcript)) {
 		return nil, errors.New("session: peer authentication failed")
 	}
-	if err := conn.WriteMessage(ctx, protocol.NewMessage(protocol.MessageTypeSessionReady, first.TransactionID, map[uint64]any{0: mac(peer.PeerCredential, "ready", transcript)})); err != nil {
+
+	hostname, err := os.Hostname()
+	if err != nil {
+		hostname = "Unknown PC"
+	}
+
+	log.Printf(
+		"SESSION_READY: sending hostname=%q tx=%x",
+		hostname,
+		first.TransactionID,
+	)
+
+	payload := map[uint64]any{
+		protocol.SessionReadyMAC:      mac(peer.PeerCredential, "ready", transcript),
+		protocol.SessionReadyHostname: hostname,
+	}
+
+	if err := conn.WriteMessage(ctx, protocol.NewMessage(protocol.MessageTypeSessionReady, first.TransactionID, payload)); err != nil {
 		return nil, err
 	}
 	return &Session{conn: conn, peer: peer, localID: localID, localPublic: identity.PublicKey, txID: append([]byte(nil), first.TransactionID...)}, nil
@@ -274,6 +333,7 @@ func (s *Session) Close() error {
 	}
 	return s.conn.Close()
 }
+
 func (s *Session) Peer() models.PairResult { return s.peer }
 
 func transcript(txID, localID, remoteID, localPub, remotePub, localNonce, remoteNonce []byte) []byte {

@@ -21,6 +21,7 @@ data class PairingState(
     val pendingPeerName: String = "",
     val confirmationPending: Boolean = false,
     val connected: Boolean = false,
+    val hostName: String? = null,
 )
 
 /** TCP server for both one-time pairing and authenticated runtime sessions. */
@@ -141,11 +142,34 @@ class PairingServer(
         }
     }
 
-    private fun handleSession(socket: Socket, first: PairingProtocol.Message) {
+    private fun handleSession(
+        socket: Socket,
+        first: PairingProtocol.Message,
+    ) {
         val session = protocol.beginSession(socket, first)
-        update { it.copy(connected = true, status = "Connected to ${session.peerName}") }
-        quavaService?.onConnected(session.peerName)
-        protocol.runSession(session)
+
+        update {
+            it.copy(
+                status = "Establishing session..."
+            )
+        }
+
+        protocol.runSession(session) { hostName ->
+            Log.d(
+                "QuavaSession",
+                "Session established with Linux host: $hostName"
+            )
+
+            update {
+                it.copy(
+                    connected = true,
+                    hostName = hostName,
+                    status = "Connected to $hostName",
+                )
+            }
+
+            quavaService?.onConnected(hostName)
+        }
     }
 
     fun confirmPairing() {
