@@ -147,6 +147,7 @@ class PairingServer(
         first: PairingProtocol.Message,
     ) {
         val session = protocol.beginSession(socket, first)
+        var peerName = session.peerName
 
         update {
             it.copy(
@@ -154,22 +155,27 @@ class PairingServer(
             )
         }
 
-        protocol.runSession(session) { hostName ->
-            Log.d(
-                "QuavaSession",
-                "Session established with Linux host: $hostName"
-            )
-
-            update {
-                it.copy(
-                    connected = true,
-                    hostName = hostName,
-                    status = "Connected to $hostName",
+        protocol.runSession(
+            session = session,
+            onReady = { hostName ->
+                peerName = hostName
+                Log.d(
+                    "QuavaSession",
+                    "Session established with Linux host: $hostName"
                 )
-            }
 
-            quavaService?.onConnected(hostName)
-        }
+                update {
+                    it.copy(
+                        connected = true,
+                        hostName = hostName,
+                        status = "Connected to $hostName",
+                    )
+                }
+
+                quavaService?.onConnected(hostName)
+            },
+            onPing = { quavaService?.onPing(peerName) },
+        )
     }
 
     fun confirmPairing() {

@@ -2,7 +2,6 @@
 package config
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -40,8 +39,7 @@ type file struct {
 }
 
 // Open loads the store at storageDir. An empty directory uses the OS config
-// location, usually ~/.config/quava. Existing identity.json and trust.json
-// files are migrated to config.yaml without deleting those legacy files.
+// location, usually ~/.config/quava.
 func Open(storageDir string) (*Store, error) {
 	dir, err := resolveDir(storageDir)
 	if err != nil {
@@ -73,15 +71,6 @@ func Open(storageDir string) (*Store, error) {
 		return nil, fmt.Errorf("config: read %s: %w", store.path, err)
 	}
 
-	migrated, err := store.migrateLegacyJSON()
-	if err != nil {
-		return nil, err
-	}
-	if migrated {
-		if err := store.Save(); err != nil {
-			return nil, err
-		}
-	}
 	return store, nil
 }
 
@@ -185,38 +174,6 @@ func (s *Store) Save() error {
 		return fmt.Errorf("config: replace %s: %w", s.path, err)
 	}
 	return nil
-}
-
-func (s *Store) migrateLegacyJSON() (bool, error) {
-	migrated := false
-	identityPath := filepath.Join(s.dir, "identity.json")
-	if data, err := os.ReadFile(identityPath); err == nil {
-		var identity models.IdentityFile
-		if err := json.Unmarshal(data, &identity); err != nil {
-			return false, fmt.Errorf("config: migrate %s: %w", identityPath, err)
-		}
-		s.SetIdentity(identity)
-		migrated = true
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return false, fmt.Errorf("config: read %s: %w", identityPath, err)
-	}
-
-	trustPath := filepath.Join(s.dir, "trust.json")
-	if data, err := os.ReadFile(trustPath); err == nil {
-		var trust models.TrustStore
-		if err := json.Unmarshal(data, &trust); err != nil {
-			return false, fmt.Errorf("config: migrate %s: %w", trustPath, err)
-		}
-		for _, device := range trust.Peers {
-			if err := s.UpsertDevice(device); err != nil {
-				return false, err
-			}
-		}
-		migrated = true
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return false, fmt.Errorf("config: read %s: %w", trustPath, err)
-	}
-	return migrated, nil
 }
 
 func resolveDir(storageDir string) (string, error) {

@@ -28,6 +28,9 @@ class QuavaService : Service() {
         nm.createNotificationChannel(
             NotificationChannel(CHANNEL, "Quava", NotificationManager.IMPORTANCE_LOW)
         )
+        nm.createNotificationChannel(
+            NotificationChannel(PING_CHANNEL, "Quava pings", NotificationManager.IMPORTANCE_DEFAULT)
+        )
         val notif = NotificationCompat.Builder(this, CHANNEL)
             .setContentTitle("Quava")
             .setContentText("Listening for connections")
@@ -65,6 +68,17 @@ class QuavaService : Service() {
         val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         nm.notify(1, notif)
     }
+
+    public fun onPing(peerName: String) {
+        val notification = NotificationCompat.Builder(this, PING_CHANNEL)
+            .setContentTitle("Quava ping received")
+            .setContentText("Ping received from $peerName")
+            .setSmallIcon(android.R.drawable.stat_sys_data_bluetooth)
+            .setAutoCancel(true)
+            .build()
+        val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        nm.notify(PING_NOTIFICATION_ID, notification)
+    }
     
     override fun onDestroy() {
         mdns.stop()
@@ -76,5 +90,7 @@ class QuavaService : Service() {
     companion object {
         const val PORT = 48273
         private const val CHANNEL = "quava"
+        private const val PING_CHANNEL = "quava_pings"
+        private const val PING_NOTIFICATION_ID = 2
     }
 }

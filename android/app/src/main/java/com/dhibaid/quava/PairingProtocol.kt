@@ -256,6 +256,7 @@ class PairingProtocol(private val appContext: Context) {
     internal fun runSession(
         session: RuntimeSession,
         onReady: (String) -> Unit,
+        onPing: () -> Unit,
     ) {
         while (!session.socket.isClosed) {
             Log.d("Quava", "Waiting for session message...")
@@ -281,6 +282,7 @@ class PairingProtocol(private val appContext: Context) {
 
                 PING -> {
                     Log.d("Quava", "Received PING")
+                    val silent = message.payload[PING_SILENT] as? Boolean ?: false
 
                     writeMessage(
                         session.output,
@@ -290,6 +292,8 @@ class PairingProtocol(private val appContext: Context) {
                             emptyMap(),
                         ),
                     )
+
+                    if (!silent) onPing()
                 }
 
                 else -> {
@@ -533,6 +537,7 @@ class PairingProtocol(private val appContext: Context) {
         private const val SESSION_READY = 0x13L
         private const val PING = 0x20L
         private const val PONG = 0x21L
+        private const val PING_SILENT = 0
         private const val MAX_FRAME_BYTES = 64 * 1024
         private const val PAIRING_TIMEOUT_MS = 120_000
         private const val TRANSACTION_ID_BYTES = 16

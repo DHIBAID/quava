@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"sync"
 	"time"
 
 	"libquava/crypto"
@@ -27,6 +28,10 @@ type Session struct {
 	localID     []byte
 	localPublic ed25519.PublicKey
 	txID        []byte
+
+	pingMutex sync.Mutex
+	// pendingMutex sync.Mutex
+	// pending      map[models.TransactionID]chan protocol.Message
 }
 
 func Connect(ctx context.Context, conn *protocol.Conn, identity models.IdentityFile, peer models.PairResult) (*Session, error) {
@@ -291,24 +296,6 @@ func Run(ctx context.Context, identity models.IdentityFile, peer models.PairResu
 	}
 }
 
-func (s *Session) Ping(ctx context.Context) error {
-	if s == nil || s.conn == nil {
-		return errors.New("session: closed")
-	}
-	id, err := crypto.GenerateTransactionID()
-	if err != nil {
-		return err
-	}
-	if err := s.conn.WriteMessage(ctx, protocol.NewMessage(protocol.MessageTypePing, id, nil)); err != nil {
-		return err
-	}
-	msg, err := s.conn.ReadMessage(ctx)
-	if err != nil {
-		return err
-	}
-	return protocol.ValidatePong(msg, id)
-}
-
 func (s *Session) RunHeartbeat(ctx context.Context) error {
 	ticker := time.NewTicker(heartbeatInterval)
 	defer ticker.Stop()
@@ -317,14 +304,37 @@ func (s *Session) RunHeartbeat(ctx context.Context) error {
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-ticker.C:
-			pingCtx, cancel := context.WithTimeout(ctx, sessionTimeout)
-			err := s.Ping(pingCtx)
+			heartbeatCtx, cancel := context.WithTimeout(ctx, sessionTimeout)
+			err := s.sendHeartbeat(heartbeatCtx)
 			cancel()
 			if err != nil {
 				return err
 			}
 		}
 	}
+}
+
+func (s *Session) sendHeartbeat(ctx context.Context) error {
+	if s == nil || s.conn == nil {
+		return errors.New("session: closed")
+	}
+	s.pingMutex.Lock()
+	defer s.pingMutex.Unlock()
+
+	transactionID, err := crypto.GenerateTransactionID()
+	if err != nil {
+		return err
+	}
+
+	if err := s.conn.WriteMessage(ctx, protocol.NewMessage(protocol.MessageTypePing, transactionID, map[uint64]any{protocol.PingPayloadSilent: true})); err != nil {
+		return err
+	}
+
+	response, err := s.conn.ReadMessage(ctx)
+	if err != nil {
+		return err
+	}
+	return protocol.ValidatePong(response, transactionID)
 }
 
 func (s *Session) Close() error {

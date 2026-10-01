@@ -2,7 +2,6 @@ package discovery
 
 import (
 	"context"
-	"crypto/rand"
 	"fmt"
 	"net"
 	"strconv"
@@ -64,34 +63,4 @@ func (c *Connection) Close() error {
 		return nil
 	}
 	return c.conn.Close()
-}
-
-// Ping sends a PING message and waits for the matching PONG.
-func (c *Connection) Ping(ctx context.Context) error {
-	if c == nil || c.conn == nil {
-		return fmt.Errorf("discovery: nil connection")
-	}
-
-	requestID, err := generateRequestID()
-	if err != nil {
-		return err
-	}
-
-	if err := c.conn.WriteMessage(ctx, protocol.NewMessage(protocol.MessageTypePing, requestID, nil)); err != nil {
-		return err
-	}
-
-	response, err := c.conn.ReadMessage(ctx)
-	if err != nil {
-		return err
-	}
-	return protocol.ValidatePong(response, requestID)
-}
-
-func generateRequestID() ([]byte, error) {
-	var raw [8]byte
-	if _, err := rand.Read(raw[:]); err != nil {
-		return nil, err
-	}
-	return append([]byte(nil), raw[:]...), nil
 }
