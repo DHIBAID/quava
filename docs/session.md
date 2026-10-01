@@ -23,16 +23,18 @@ the PC alive when there is no active session. When a PC connects using an alread
 identity, the Android service authenticates the peer and keeps that socket open.
 
 The Go `session` package provides the corresponding initiator-side handshake and a
-heartbeat loop. The CLI exposes this as:
+heartbeat loop. `quavad` owns that state and runs it independently of the CLI. Start
+`quavad` (normally through systemd), discover the peer ID, then ask the CLI to connect:
 
 ```bash
-go run . connect "Quava Android"
+cd daemon/quavad && go run .
+cd ../cli && go run . discover
+go run . connect <peer_device_id>
 ```
 
-The command intentionally remains attached to the session. This is a prototype of the
-future always-running Linux daemon's session manager: the eventual daemon can reuse the
-same `session.Connect` API and retain the resulting `Session` in a manager instead of
-terminating with the CLI.
+All CLI commands identify a peer by `peer_device_id`; display names are informational
+only. `connect` returns once the daemon has scheduled the durable session, and `ping`
+uses that daemon-owned session.
 
 ## Current limitation
 

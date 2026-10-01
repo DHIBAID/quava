@@ -7,10 +7,11 @@ import (
 
 // InitiatorOptions controls the pairing initiator flow.
 type InitiatorOptions struct {
-	StorageDir       string
-	DeviceName       string
-	RemoteDeviceName string
-	Capabilities     []uint64
+	StorageDir           string
+	DeviceName           string
+	RemoteDeviceName     string
+	ExpectedPeerDeviceID string
+	Capabilities         []uint64
 }
 
 // PairResult is persisted after a successful pairing.

@@ -3,6 +3,7 @@ package com.dhibaid.quava
 import android.app.*
 import android.content.Context
 import android.content.Intent
+import android.app.PendingIntent
 import android.os.Binder
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
@@ -31,27 +32,17 @@ class QuavaService : Service() {
         nm.createNotificationChannel(
             NotificationChannel(PING_CHANNEL, "Quava pings", NotificationManager.IMPORTANCE_DEFAULT)
         )
-        val notif = NotificationCompat.Builder(this, CHANNEL)
-            .setContentTitle("Quava")
-            .setContentText("Listening for connections")
-            .setSmallIcon(android.R.drawable.stat_sys_data_bluetooth)
-            .setOngoing(true)
-            .build()
+        val notif = foregroundNotification("Listening for connections")
         startForeground(1, notif)
 
         server = PairingServer(scope, this)
         mdns = MdnsAdvertiser(this)
-        if (server.start(PORT)) mdns.start(PORT)
+        if (server.start(PORT)) mdns.start(PORT, server.localDeviceIdHex())
     }
 
     public fun onConnected(peerName: String) {
         // update contents of the notification to indicate that we are connected to a peer
-        val notif = NotificationCompat.Builder(this, CHANNEL)
-            .setContentTitle("Quava")
-            .setContentText("Connected to $peerName")
-            .setSmallIcon(android.R.drawable.stat_sys_data_bluetooth)
-            .setOngoing(true)
-            .build()
+        val notif = foregroundNotification("Connected to $peerName")
         val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         nm.notify(1, notif)
     }
@@ -59,12 +50,7 @@ class QuavaService : Service() {
     
     public fun onDisconnected() {
         // update contents of the notification to indicate that we are connected to a peer
-        val notif = NotificationCompat.Builder(this, CHANNEL)
-            .setContentTitle("Quava")
-            .setContentText("Listening for connections")
-            .setSmallIcon(android.R.drawable.stat_sys_data_bluetooth)
-            .setOngoing(true)
-            .build()
+        val notif = foregroundNotification("Listening for connections")
         val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         nm.notify(1, notif)
     }
@@ -75,6 +61,7 @@ class QuavaService : Service() {
             .setContentText("Ping received from $peerName")
             .setSmallIcon(android.R.drawable.stat_sys_data_bluetooth)
             .setAutoCancel(true)
+            .setContentIntent(homePendingIntent())
             .build()
         val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         nm.notify(PING_NOTIFICATION_ID, notification)
@@ -86,6 +73,23 @@ class QuavaService : Service() {
         scope.cancel()
         super.onDestroy()
     }
+
+    private fun foregroundNotification(text: String) = NotificationCompat.Builder(this, CHANNEL)
+        .setContentTitle("Quava")
+        .setContentText(text)
+        .setSmallIcon(android.R.drawable.stat_sys_data_bluetooth)
+        .setOngoing(true)
+        .setContentIntent(homePendingIntent())
+        .build()
+
+    private fun homePendingIntent(): PendingIntent = PendingIntent.getActivity(
+        this,
+        0,
+        Intent(this, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
+        },
+        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+    )
 
     companion object {
         const val PORT = 48273

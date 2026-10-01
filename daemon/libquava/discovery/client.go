@@ -13,10 +13,11 @@ import (
 
 // Device is a discovered Quava service on the local network.
 type Device struct {
-	Name    string
-	Host    string
-	Address string
-	Port    int
+	PeerDeviceID string `json:"peer_device_id"`
+	Name         string
+	Host         string
+	Address      string
+	Port         int
 }
 
 // Client performs minimal mDNS/DNS-SD discovery for Quava services.
@@ -37,6 +38,7 @@ func NewClient() (*Client, error) {
 	if err != nil {
 		return nil, err
 	}
+
 	if err := conn.SetReadBuffer(64 << 10); err != nil {
 		_ = conn.Close()
 		return nil, err
@@ -50,15 +52,17 @@ func (c *Client) Discover(ctx context.Context) ([]Device, error) {
 	return c.discover(ctx, "")
 }
 
-// Find returns the first fully assembled device whose name matches targetName.
-func (c *Client) Find(ctx context.Context, targetName string) (Device, error) {
-	devices, err := c.discover(ctx, targetName)
+// Find returns the first fully assembled device whose advertised peer device ID matches targetID.
+func (c *Client) Find(ctx context.Context, targetID string) (Device, error) {
+	devices, err := c.discover(ctx, targetID)
 	if err != nil {
 		return Device{}, err
 	}
+
 	if len(devices) == 0 {
-		return Device{}, fmt.Errorf("discovery: device %q not found", targetName)
+		return Device{}, fmt.Errorf("discovery: peer device %q not found", targetID)
 	}
+
 	return devices[0], nil
 }
 
@@ -71,6 +75,7 @@ func (c *Client) discover(ctx context.Context, targetName string) ([]Device, err
 	if err != nil {
 		return nil, err
 	}
+
 	if _, err := c.conn.WriteToUDP(query, c.multicast); err != nil {
 		return nil, err
 	}
@@ -79,6 +84,7 @@ func (c *Client) discover(ctx context.Context, targetName string) ([]Device, err
 	srvByName := map[string]models.SRVRecord{}
 	addressByHost := map[string]string{}
 	devicesByKey := map[string]Device{}
+	idByName := map[string]string{}
 
 	for {
 		if ctx.Err() != nil {
@@ -95,9 +101,11 @@ func (c *Client) discover(ctx context.Context, targetName string) ([]Device, err
 			if ne, ok := err.(net.Error); ok && ne.Timeout() {
 				continue
 			}
+
 			if ctx.Err() != nil {
 				return deviceListFromMaps(devicesByKey), ctx.Err()
 			}
+
 			return deviceListFromMaps(devicesByKey), err
 		}
 
@@ -113,36 +121,60 @@ func (c *Client) discover(ctx context.Context, targetName string) ([]Device, err
 				if err != nil {
 					continue
 				}
+
 				addressByHost[address.Name] = address.Address
+
 				for _, srv := range srvByName {
 					if srv.Target == address.Name {
 						if _, ok := ptrTargets[srv.Name]; ok {
-							if device, added := addDevice(devicesByKey, srv.Name, srv, address.Address); added && targetName != "" && (device.Name == targetName) && device.Address != "" {
+							if device, added := addDevice(devicesByKey, srv.Name, srv, address.Address, idByName[srv.Name]); added && targetName != "" && device.PeerDeviceID == targetName && device.Address != "" {
 								return []Device{device}, nil
 							}
 						}
 					}
 				}
+
 			case models.TypePTR:
 				ptr, err := ParsePTRRecord(buf[:n], rr)
 				if err != nil || !strings.HasSuffix(ptr.Target, "._quava._udp.local.") {
 					continue
 				}
+
 				ptrTargets[ptr.Target] = struct{}{}
 				if srv, ok := srvByName[ptr.Target]; ok {
-					if device, added := addDevice(devicesByKey, ptr.Target, srv, addressByHost[srv.Target]); added && targetName != "" && device.Name == targetName && device.Address != "" {
+					if device, added := addDevice(devicesByKey, ptr.Target, srv, addressByHost[srv.Target], idByName[ptr.Target]); added && targetName != "" && device.PeerDeviceID == targetName && device.Address != "" {
 						return []Device{device}, nil
 					}
 				}
+
 			case models.TypeSRV:
 				srv, err := ParseSRVRecord(buf[:n], rr)
 				if err != nil || !strings.HasSuffix(srv.Name, "._quava._udp.local.") {
 					continue
 				}
+
 				srvByName[srv.Name] = srv
 				if _, ok := ptrTargets[srv.Name]; ok {
-					if device, added := addDevice(devicesByKey, srv.Name, srv, addressByHost[srv.Target]); added && targetName != "" && device.Name == targetName && device.Address != "" {
+					if device, added := addDevice(devicesByKey, srv.Name, srv, addressByHost[srv.Target], idByName[srv.Name]); added && targetName != "" && device.PeerDeviceID == targetName && device.Address != "" {
 						return []Device{device}, nil
+					}
+				}
+
+			case models.TypeTXT:
+				txt, err := ParseTXTRecord(buf[:n], rr)
+				if err != nil {
+					continue
+				}
+
+				idByName[txt.Name] = strings.ToLower(txt.Attributes["peer_device_id"])
+
+				for key, device := range devicesByKey {
+					if strings.HasPrefix(key, strings.TrimSuffix(txt.Name, "._quava._udp.local.")+"|") {
+						device.PeerDeviceID = idByName[txt.Name]
+						devicesByKey[key] = device
+						if targetName != "" && device.PeerDeviceID == targetName && device.Address != "" {
+							return []Device{device}, nil
+						}
 					}
 				}
 			}
@@ -156,6 +188,7 @@ func (c *Client) Close() error {
 	if c == nil || c.conn == nil {
 		return nil
 	}
+
 	return c.conn.Close()
 }
 
@@ -169,15 +202,19 @@ func findMDNSInterface() (*net.Interface, error) {
 		if iface.Flags&net.FlagUp == 0 || iface.Flags&net.FlagMulticast == 0 {
 			continue
 		}
+
 		addrs, err := iface.Addrs()
 		if err != nil {
 			continue
 		}
+
 		for _, addr := range addrs {
 			ipnet, ok := addr.(*net.IPNet)
+
 			if !ok || ipnet.IP.To4() == nil || ipnet.IP.IsLoopback() {
 				continue
 			}
+
 			return &iface, nil
 		}
 	}
@@ -185,121 +222,50 @@ func findMDNSInterface() (*net.Interface, error) {
 	return nil, fmt.Errorf("discovery: no suitable IPv4 multicast interface found")
 }
 
-func addDevice(mapByKey map[string]Device, instanceName string, srv models.SRVRecord, address string) (Device, bool) {
+func addDevice(mapByKey map[string]Device, instanceName string, srv models.SRVRecord, address, peerDeviceID string) (Device, bool) {
 	name := strings.TrimSuffix(instanceName, "._quava._udp.local.")
 	if name == "" {
 		name = strings.TrimSuffix(srv.Name, "._quava._udp.local.")
 	}
+
 	if name == "" {
 		name = instanceName
 	}
-	device := Device{Name: name, Host: srv.Target, Address: address, Port: srv.Port}
+
+	device := Device{PeerDeviceID: peerDeviceID, Name: name, Host: srv.Target, Address: address, Port: srv.Port}
 	key := fmt.Sprintf("%s|%s|%d", device.Name, device.Host, device.Port)
 	if existing, ok := mapByKey[key]; ok {
 		if existing.Address == "" && device.Address != "" {
 			mapByKey[key] = device
+
 			return device, true
 		}
+
 		return existing, false
 	}
 	mapByKey[key] = device
+
 	return device, true
 }
 
 func deviceListFromMaps(devicesByKey map[string]Device) []Device {
 	devices := make([]Device, 0, len(devicesByKey))
+
 	for _, device := range devicesByKey {
 		devices = append(devices, device)
 	}
+
 	sort.Slice(devices, func(i, j int) bool {
 		if devices[i].Name == devices[j].Name {
 			if devices[i].Host == devices[j].Host {
 				return devices[i].Port < devices[j].Port
 			}
+
 			return devices[i].Host < devices[j].Host
 		}
+
 		return devices[i].Name < devices[j].Name
 	})
+
 	return devices
 }
-
-// func (c *Client) FindPaired(ctx context.Context, targetID string) (Device, error) {
-// 	device, err := c.discoverByID(ctx, targetID)
-// 	if err != nil {
-// 		return Device{}, err
-// 	}
-
-// 	return device, nil
-// }
-
-// func (c *Client) discoverByID(ctx context.Context, targetID string) (Device, error) {
-// 	// We already have the device ID, so we can just listen for SRV and A records until we find a matching device.
-// 	if c == nil || c.conn == nil {
-// 		return Device{}, errors.New("discovery: nil client")
-// 	}
-
-// 	srvByName := map[string]models.SRVRecord{}
-// 	addressByHost := map[string]string{}
-// 	devicesByKey := map[string]Device{}
-
-// 	for {
-// 		if ctx.Err() != nil {
-// 			return Device{}, ctx.Err()
-// 		}
-
-// 		if err := c.conn.SetReadDeadline(time.Now().Add(250 * time.Millisecond)); err != nil {
-// 			return Device{}, err
-// 		}
-
-// 		buf := make([]byte, 4096)
-// 		n, _, err := c.conn.ReadFromUDP(buf)
-// 		if err != nil {
-// 			if ne, ok := err.(net.Error); ok && ne.Timeout() {
-// 				continue
-// 			}
-// 			if ctx.Err() != nil {
-// 				return Device{}, ctx.Err()
-// 			}
-// 			return Device{}, err
-// 		}
-
-// 		packet, err := ParsePacket(buf[:n])
-// 		if err != nil {
-// 			continue
-// 		}
-
-// 		for _, rr := range append(packet.Answers, packet.Additional...) {
-// 			switch rr.Type {
-// 			case models.TypeA:
-// 				address, err := ParseARecord(rr)
-// 				if err != nil {
-// 					continue
-// 				}
-// 				addressByHost[address.Name] = address.Address
-// 				for _, srv := range srvByName {
-// 					if srv.Target == address.Name {
-// 						if device, added := addDevice(devicesByKey, srv.Name, srv, address.Address); added && device.ID == targetID && device.Address != "" {
-// 							return device, nil
-// 						}
-// 					}
-// 				}
-// 			case models.TypeSRV:
-// 				srv, err := ParseSRVRecord(rr)
-// 				if err != nil {
-// 					continue
-// 				}
-// 				srvByName[srv.Name] = srv
-// 				for _, addr := range addressByHost {
-// 					if addr == srv.Target {
-// 						if device, added := addDevice(devicesByKey, srv.Name, srv, addr); added && device.ID == targetID && device.Address != "" {
-// 							return device, nil
-// 						}
-// 					}
-// 				}
-// 			}
-// 		}
-// 	}
-// }
-
-// TODO: This prototype intentionally does not resolve hostnames to IPv4 addresses,
-// and does not implement a full mDNS service cache or packet retry loop.

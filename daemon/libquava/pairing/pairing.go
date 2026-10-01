@@ -22,6 +22,7 @@ func Initiate(ctx context.Context, conn *protocol.Conn, options models.Initiator
 	if conn == nil {
 		return nil, errors.New("pairing: nil connection")
 	}
+
 	if confirm == nil {
 		return nil, errors.New("pairing: nil confirm callback")
 	}
@@ -35,16 +36,17 @@ func Initiate(ctx context.Context, conn *protocol.Conn, options models.Initiator
 	if err != nil {
 		return nil, err
 	}
+
 	initiatorNonce, err := qcrypto.GenerateNonce()
 	if err != nil {
 		return nil, err
 	}
+
 	initiatorEphemeralPrivate, initiatorEphemeralPublic, err := qcrypto.GenerateX25519KeyPair()
 	if err != nil {
 		return nil, err
 	}
 
-	selectedVersion := uint64(protocol.ProtocolVersion)
 	initiatorDeviceID := qcrypto.DeviceIDBytes(identity.PublicKey)
 	requestPayload := map[uint64]any{
 		0: initiatorDeviceID,
@@ -54,6 +56,7 @@ func Initiate(ctx context.Context, conn *protocol.Conn, options models.Initiator
 		4: identity.DeviceName,
 		5: append([]uint64(nil), options.Capabilities...),
 	}
+
 	if err := conn.WriteMessage(ctx, protocol.NewMessage(protocol.MessageTypePairRequest, transactionID, requestPayload)); err != nil {
 		return nil, err
 	}
@@ -62,6 +65,7 @@ func Initiate(ctx context.Context, conn *protocol.Conn, options models.Initiator
 	if err != nil {
 		return nil, err
 	}
+
 	if err := validateMessage(challengeMessage, protocol.MessageTypePairChallenge, transactionID); err != nil {
 		return nil, err
 	}
@@ -70,29 +74,40 @@ func Initiate(ctx context.Context, conn *protocol.Conn, options models.Initiator
 	if err != nil {
 		return nil, err
 	}
+
+	if expected := strings.ToLower(strings.TrimSpace(options.ExpectedPeerDeviceID)); expected != "" && !hmac.Equal([]byte(expected), []byte(hex.EncodeToString(responderDeviceID))) {
+		return nil, errors.New("pairing: peer device id does not match requested peer_device_id")
+	}
+
 	responderPublicKey, err := protocol.PayloadBytes(challengeMessage.Payload, 1)
 	if err != nil {
 		return nil, err
 	}
+
 	responderNonce, err := protocol.PayloadBytes(challengeMessage.Payload, 2)
 	if err != nil {
 		return nil, err
 	}
-	selectedVersion, err = protocol.PayloadUint(challengeMessage.Payload, 3)
+
+	selectedVersion, err := protocol.PayloadUint(challengeMessage.Payload, 3)
 	if err != nil {
 		return nil, err
 	}
+
 	if selectedVersion != protocol.ProtocolVersion {
 		return nil, fmt.Errorf("pairing: unsupported version %d", selectedVersion)
 	}
+
 	responderEphemeralPublic, err := protocol.PayloadBytes(challengeMessage.Payload, 4)
 	if err != nil {
 		return nil, err
 	}
+
 	verificationCode, err := protocol.PayloadUint(challengeMessage.Payload, 5)
 	if err != nil {
 		return nil, err
 	}
+
 	computedVerificationCode := qcrypto.VerificationCode(identity.PublicKey, responderPublicKey, initiatorNonce, responderNonce, transactionID)
 	if uint64(computedVerificationCode) != verificationCode {
 		return nil, fmt.Errorf("pairing: verification code mismatch")
@@ -102,10 +117,12 @@ func Initiate(ctx context.Context, conn *protocol.Conn, options models.Initiator
 	if strings.TrimSpace(remoteName) == "" {
 		remoteName = hex.EncodeToString(responderDeviceID)
 	}
+
 	confirmCode, err := confirm(uint32(verificationCode), remoteName)
 	if err != nil {
 		return nil, err
 	}
+
 	if !confirmCode {
 		cancelPayload := map[uint64]any{0: protocol.ReasonUserRejected}
 		_ = conn.WriteMessage(ctx, protocol.NewMessage(protocol.MessageTypePairCancel, transactionID, cancelPayload))
@@ -116,6 +133,7 @@ func Initiate(ctx context.Context, conn *protocol.Conn, options models.Initiator
 	if err != nil {
 		return nil, err
 	}
+
 	masterSecret, err := qcrypto.MasterSecret(initiatorNonce, responderNonce, sharedSecret)
 	if err != nil {
 		return nil, err
@@ -128,6 +146,7 @@ func Initiate(ctx context.Context, conn *protocol.Conn, options models.Initiator
 		0: append([]byte(nil), initiatorEphemeralPublic...),
 		1: identitySignature,
 	}
+
 	if err := conn.WriteMessage(ctx, protocol.NewMessage(protocol.MessageTypePairAuthenticate, transactionID, authenticatePayload)); err != nil {
 		return nil, err
 	}
@@ -141,27 +160,34 @@ func Initiate(ctx context.Context, conn *protocol.Conn, options models.Initiator
 	if err != nil {
 		return nil, err
 	}
+
 	if err := validateMessage(confirmationMessage, protocol.MessageTypePairComplete, transactionID); err != nil {
 		return nil, err
 	}
+
 	completeDeviceID, err := protocol.PayloadBytes(confirmationMessage.Payload, 0)
 	if err != nil {
 		return nil, err
 	}
+
 	confirmationMAC, err := protocol.PayloadBytes(confirmationMessage.Payload, 1)
 	if err != nil {
 		return nil, err
 	}
+
 	responderSignature, err := protocol.PayloadBytes(confirmationMessage.Payload, 2)
 	if err != nil {
 		return nil, err
 	}
+
 	if !hmac.Equal(completeDeviceID, responderDeviceID) {
 		return nil, errors.New("pairing: responder device id mismatch")
 	}
+
 	if !hmac.Equal(confirmationMAC, qcrypto.ConfirmationMAC(masterSecret, transactionID)) {
 		return nil, errors.New("pairing: confirmation mac mismatch")
 	}
+
 	if err := qcrypto.VerifyTranscript(ed25519.PublicKey(responderPublicKey), transcript, responderSignature); err != nil {
 		return nil, err
 	}
@@ -170,6 +196,7 @@ func Initiate(ctx context.Context, conn *protocol.Conn, options models.Initiator
 	if err != nil {
 		return nil, err
 	}
+
 	result := &models.PairResult{
 		PeerDeviceID:      hex.EncodeToString(responderDeviceID),
 		PeerPublicKey:     append([]byte(nil), responderPublicKey...),
@@ -183,9 +210,11 @@ func Initiate(ctx context.Context, conn *protocol.Conn, options models.Initiator
 		TransactionID:     append([]byte(nil), transactionID...),
 		InitiatorDeviceID: hex.EncodeToString(initiatorDeviceID),
 	}
+
 	if err := persistTrust(options.StorageDir, *result); err != nil {
 		return nil, err
 	}
+
 	return result, nil
 }
 
@@ -194,10 +223,12 @@ func loadOrCreateIdentity(storageDir, deviceName string) (models.IdentityFile, s
 	if err != nil {
 		return models.IdentityFile{}, "", err
 	}
+
 	if file, ok := store.Identity(); ok {
 		if len(file.PrivateKey) != ed25519.PrivateKeySize || len(file.PublicKey) != ed25519.PublicKeySize {
 			return models.IdentityFile{}, "", errors.New("pairing: invalid identity file")
 		}
+
 		if strings.TrimSpace(file.DeviceName) == "" {
 			file.DeviceName = fallbackDeviceName(deviceName)
 			store.SetIdentity(file)
@@ -205,6 +236,7 @@ func loadOrCreateIdentity(storageDir, deviceName string) (models.IdentityFile, s
 				return models.IdentityFile{}, "", err
 			}
 		}
+
 		return file, store.Dir(), nil
 	}
 
@@ -212,15 +244,18 @@ func loadOrCreateIdentity(storageDir, deviceName string) (models.IdentityFile, s
 	if err != nil {
 		return models.IdentityFile{}, "", err
 	}
+
 	file := models.IdentityFile{
 		DeviceName: fallbackDeviceName(deviceName),
 		PrivateKey: identity.PrivateKey,
 		PublicKey:  identity.PublicKey,
 	}
+
 	store.SetIdentity(file)
 	if err := store.Save(); err != nil {
 		return models.IdentityFile{}, "", err
 	}
+
 	return file, store.Dir(), nil
 }
 
@@ -229,9 +264,11 @@ func persistTrust(storageDir string, result models.PairResult) error {
 	if err != nil {
 		return err
 	}
+
 	if err := store.UpsertDevice(result); err != nil {
 		return err
 	}
+
 	return store.Save()
 }
 
@@ -239,10 +276,12 @@ func fallbackDeviceName(deviceName string) string {
 	if strings.TrimSpace(deviceName) != "" {
 		return strings.TrimSpace(deviceName)
 	}
+
 	hostname, err := os.Hostname()
 	if err != nil || strings.TrimSpace(hostname) == "" {
 		return "Quava"
 	}
+
 	return hostname
 }
 
@@ -250,11 +289,14 @@ func validateMessage(message protocol.Message, expectedType uint64, expectedTran
 	if message.Version != protocol.ProtocolVersion {
 		return fmt.Errorf("pairing: unexpected version %d", message.Version)
 	}
+
 	if message.Type != expectedType {
 		return fmt.Errorf("%w: got %d want %d", protocol.ErrUnexpectedType, message.Type, expectedType)
 	}
+
 	if !hmac.Equal(message.TransactionID, expectedTransactionID) {
 		return fmt.Errorf("%w", protocol.ErrUnexpectedID)
 	}
+
 	return nil
 }

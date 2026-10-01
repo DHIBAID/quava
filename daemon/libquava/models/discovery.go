@@ -3,6 +3,7 @@ package models
 const (
 	TypeA     = 1
 	TypePTR   = 12
+	TypeTXT   = 16
 	TypeSRV   = 33
 	ClassINET = 1
 )
@@ -61,4 +62,10 @@ type SRVRecord struct {
 type ARecord struct {
 	Name    string
 	Address string
+}
+
+// TXTRecord contains DNS-SD text attributes.
+type TXTRecord struct {
+	Name       string
+	Attributes map[string]string
 }

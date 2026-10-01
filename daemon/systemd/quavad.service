@@ -1,0 +1,14 @@
+[Unit]
+Description=Quava daemon
+Requires=quavad.socket
+After=quavad.socket network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/quavad
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

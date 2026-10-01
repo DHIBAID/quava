@@ -38,6 +38,9 @@ class PairingProtocol(private val appContext: Context) {
         identity = IdentityStore(appContext, provider).loadOrCreate()
     }
 
+    /** Stable ID advertised over mDNS so desktop clients never need a display name. */
+    fun localDeviceIdHex(): String = deviceId(identity.publicRaw).joinToString("") { "%02x".format(it) }
+
     class BusyException : Exception()
 
     class Session internal constructor(

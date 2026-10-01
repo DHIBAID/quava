@@ -1,0 +1,11 @@
+[Unit]
+Description=Quava daemon control socket
+
+[Socket]
+ListenStream=%h/.config/quava/quavad.sock
+SocketMode=0600
+DirectoryMode=0700
+Service=quavad.service
+
+[Install]
+WantedBy=sockets.target

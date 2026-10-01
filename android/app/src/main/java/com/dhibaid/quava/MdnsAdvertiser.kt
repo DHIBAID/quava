@@ -12,16 +12,18 @@ class MdnsAdvertiser(private val context: Context) {
     private var multicastLock: WifiManager.MulticastLock? = null
     private var listener: NsdManager.RegistrationListener? = null
 
-    fun start(port: Int, instanceName: String = "Quava Android") {
+    fun start(port: Int, peerDeviceId: String) {
         multicastLock = wifi.createMulticastLock("quava-mdns").apply {
             setReferenceCounted(false)
             acquire()
         }
 
         val info = NsdServiceInfo().apply {
-            serviceName = instanceName
+            // Build.MODEL is the user-visible system device name (for example RMX2353).
+            serviceName = android.os.Build.MODEL
             serviceType = "_quava._udp."
             setPort(port)
+            setAttribute("peer_device_id", peerDeviceId)
         }
 
         listener = object : NsdManager.RegistrationListener {

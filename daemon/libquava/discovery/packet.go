@@ -13,6 +13,7 @@ func ParseHeader(data []byte) (models.Header, error) {
 	if len(data) < 12 {
 		return models.Header{}, fmt.Errorf("dns: short header: %d", len(data))
 	}
+
 	return models.Header{
 		ID:      binary.BigEndian.Uint16(data[0:2]),
 		Flags:   binary.BigEndian.Uint16(data[2:4]),
@@ -26,12 +27,14 @@ func ParseHeader(data []byte) (models.Header, error) {
 // EncodeHeader encodes a DNS header.
 func EncodeHeader(h models.Header) []byte {
 	buf := make([]byte, 12)
+
 	binary.BigEndian.PutUint16(buf[0:2], h.ID)
 	binary.BigEndian.PutUint16(buf[2:4], h.Flags)
 	binary.BigEndian.PutUint16(buf[4:6], h.QDCount)
 	binary.BigEndian.PutUint16(buf[6:8], h.ANCount)
 	binary.BigEndian.PutUint16(buf[8:10], h.NSCount)
 	binary.BigEndian.PutUint16(buf[10:12], h.ARCount)
+
 	return buf
 }
 
@@ -50,6 +53,7 @@ func ParsePacket(data []byte) (*models.Packet, error) {
 		if err != nil {
 			return nil, err
 		}
+
 		packet.Questions = append(packet.Questions, question)
 		offset = next
 	}
@@ -59,6 +63,7 @@ func ParsePacket(data []byte) (*models.Packet, error) {
 		if err != nil {
 			return nil, err
 		}
+
 		packet.Answers = append(packet.Answers, rr)
 		offset = next
 	}
@@ -68,6 +73,7 @@ func ParsePacket(data []byte) (*models.Packet, error) {
 		if err != nil {
 			return nil, err
 		}
+
 		offset = next
 	}
 
@@ -76,6 +82,7 @@ func ParsePacket(data []byte) (*models.Packet, error) {
 		if err != nil {
 			return nil, err
 		}
+
 		packet.Additional = append(packet.Additional, rr)
 		offset = next
 	}
@@ -92,13 +99,16 @@ func EncodeDNSName(name string) []byte {
 
 	labels := strings.Split(trimmed, ".")
 	buf := make([]byte, 0, len(trimmed)+2)
+
 	for _, label := range labels {
 		if len(label) > 63 {
 			panic("dns: label too long")
 		}
+
 		buf = append(buf, byte(len(label)))
 		buf = append(buf, []byte(label)...)
 	}
+
 	buf = append(buf, 0)
 	return buf
 }
@@ -128,12 +138,15 @@ func DecodeDNSName(data []byte, offset int) (string, int, error) {
 			if offset+1 >= len(data) {
 				return "", 0, fmt.Errorf("dns: bad compression pointer")
 			}
+
 			pointer := int(binary.BigEndian.Uint16(data[offset:offset+2]) & 0x3FFF)
 			if !seenPointer {
 				originalOffset = offset + 2
 			}
+
 			seenPointer = true
 			offset = pointer
+
 			continue
 		}
 
@@ -141,6 +154,7 @@ func DecodeDNSName(data []byte, offset int) (string, int, error) {
 		if offset+length > len(data) {
 			return "", 0, fmt.Errorf("dns: name label exceeds buffer")
 		}
+
 		labels = append(labels, string(data[offset:offset+length]))
 		offset += length
 	}
@@ -149,6 +163,7 @@ func DecodeDNSName(data []byte, offset int) (string, int, error) {
 		if seenPointer {
 			return ".", originalOffset, nil
 		}
+
 		return ".", offset, nil
 	}
 
@@ -156,6 +171,7 @@ func DecodeDNSName(data []byte, offset int) (string, int, error) {
 	if seenPointer {
 		return name, originalOffset, nil
 	}
+
 	return name, offset, nil
 }
 
@@ -164,12 +180,14 @@ func parseQuestion(data []byte, offset int) (models.Question, int, error) {
 	if err != nil {
 		return models.Question{}, 0, err
 	}
+
 	if next+4 > len(data) {
 		return models.Question{}, 0, fmt.Errorf("dns: truncated question")
 	}
 
 	qtype := binary.BigEndian.Uint16(data[next : next+2])
 	qclass := binary.BigEndian.Uint16(data[next+2 : next+4])
+
 	return models.Question{Name: name, Type: qtype, Class: qclass}, next + 4, nil
 }
 
@@ -178,6 +196,7 @@ func parseResourceRecord(data []byte, offset int) (models.ResourceRecord, int, e
 	if err != nil {
 		return models.ResourceRecord{}, 0, err
 	}
+
 	if next+10 > len(data) {
 		return models.ResourceRecord{}, 0, fmt.Errorf("dns: truncated resource record")
 	}
@@ -186,9 +205,11 @@ func parseResourceRecord(data []byte, offset int) (models.ResourceRecord, int, e
 	clazz := binary.BigEndian.Uint16(data[next+2 : next+4])
 	ttl := binary.BigEndian.Uint32(data[next+4 : next+8])
 	rdlength := int(binary.BigEndian.Uint16(data[next+8 : next+10]))
+
 	if next+10+rdlength > len(data) {
 		return models.ResourceRecord{}, 0, fmt.Errorf("dns: resource record too large")
 	}
+
 	payload := append([]byte(nil), data[next+10:next+10+rdlength]...)
 	return models.ResourceRecord{Name: name, Type: rtype, Class: clazz, TTL: ttl, Data: payload, DataOffset: next + 10}, next + 10 + rdlength, nil
 }
@@ -196,9 +217,11 @@ func parseResourceRecord(data []byte, offset int) (models.ResourceRecord, int, e
 // EncodeQuestion encodes a single DNS question.
 func EncodeQuestion(question models.Question) []byte {
 	buf := EncodeDNSName(question.Name)
+
 	b := make([]byte, 4)
 	binary.BigEndian.PutUint16(b[0:2], question.Type)
 	binary.BigEndian.PutUint16(b[2:4], question.Class)
+
 	return append(buf, b...)
 }
 
@@ -206,6 +229,7 @@ func EncodeQuestion(question models.Question) []byte {
 func BuildPTRQuery(name string) ([]byte, error) {
 	header := EncodeHeader(models.Header{ID: 0x1234, Flags: 0x0100, QDCount: 1})
 	query := EncodeQuestion(models.Question{Name: name, Type: models.TypePTR, Class: models.ClassINET})
+
 	return append(header, query...), nil
 }
 
@@ -214,10 +238,12 @@ func ParsePTRRecord(data []byte, rr models.ResourceRecord) (models.PTRRecord, er
 	if rr.Type != models.TypePTR {
 		return models.PTRRecord{}, fmt.Errorf("dns: expected PTR record, got type %d", rr.Type)
 	}
+
 	name, _, err := DecodeDNSName(data, rr.DataOffset)
 	if err != nil {
 		return models.PTRRecord{}, err
 	}
+
 	return models.PTRRecord{Name: rr.Name, Target: name}, nil
 }
 
@@ -226,6 +252,7 @@ func ParseSRVRecord(data []byte, rr models.ResourceRecord) (models.SRVRecord, er
 	if rr.Type != models.TypeSRV {
 		return models.SRVRecord{}, fmt.Errorf("dns: expected SRV record, got type %d", rr.Type)
 	}
+
 	if len(rr.Data) < 7 {
 		return models.SRVRecord{}, fmt.Errorf("dns: SRV data too short")
 	}
@@ -234,9 +261,11 @@ func ParseSRVRecord(data []byte, rr models.ResourceRecord) (models.SRVRecord, er
 	weight := binary.BigEndian.Uint16(rr.Data[2:4])
 	port := int(binary.BigEndian.Uint16(rr.Data[4:6]))
 	target, _, err := DecodeDNSName(data, rr.DataOffset+6)
+
 	if err != nil {
 		return models.SRVRecord{}, err
 	}
+
 	return models.SRVRecord{
 		Name:     rr.Name,
 		Target:   target,
@@ -251,6 +280,7 @@ func ParseARecord(rr models.ResourceRecord) (models.ARecord, error) {
 	if rr.Type != models.TypeA {
 		return models.ARecord{}, fmt.Errorf("dns: expected A record, got type %d", rr.Type)
 	}
+
 	if len(rr.Data) != 4 {
 		return models.ARecord{}, fmt.Errorf("dns: invalid A record length %d", len(rr.Data))
 	}
@@ -259,4 +289,36 @@ func ParseARecord(rr models.ResourceRecord) (models.ARecord, error) {
 		Name:    rr.Name,
 		Address: fmt.Sprintf("%d.%d.%d.%d", rr.Data[0], rr.Data[1], rr.Data[2], rr.Data[3]),
 	}, nil
+}
+
+// ParseTXTRecord decodes the length-prefixed strings in a DNS TXT record.
+func ParseTXTRecord(data []byte, rr models.ResourceRecord) (models.TXTRecord, error) {
+	if rr.Type != models.TypeTXT {
+		return models.TXTRecord{}, fmt.Errorf("dns: record is not TXT")
+	}
+
+	end := rr.DataOffset + len(rr.Data)
+	if rr.DataOffset < 0 || end > len(data) {
+		return models.TXTRecord{}, fmt.Errorf("dns: invalid TXT payload")
+	}
+
+	record := models.TXTRecord{Name: rr.Name, Attributes: map[string]string{}}
+
+	for offset := rr.DataOffset; offset < end; {
+		length := int(data[offset])
+		offset++
+
+		if offset+length > end {
+			return models.TXTRecord{}, fmt.Errorf("dns: truncated TXT string")
+		}
+
+		entry := string(data[offset : offset+length])
+		offset += length
+
+		if key, value, ok := strings.Cut(entry, "="); ok {
+			record.Attributes[key] = value
+		}
+	}
+
+	return record, nil
 }

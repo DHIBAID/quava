@@ -1,4 +1,28 @@
+.PHONY: lint systemd clean-systemd
+
 lint:
-	cd cli && go vet ./... && staticcheck ./... && cd ..
-	cd libquava && go vet ./... && staticcheck ./... && cd ..
-	cd quavad && go vet ./... && staticcheck ./... && cd ..
+	cd cli && go mod tidy && go vet ./... && golangci-lint run && staticcheck ./... && cd ..
+	cd libquava && go mod tidy && go vet ./... && golangci-lint run && staticcheck ./... && cd ..
+	cd quavad && go mod tidy && go vet ./... && golangci-lint run && staticcheck ./... && cd ..
+
+# Install a per-user, socket-activated quavad. The socket starts quavad the
+# first time the CLI connects, and the daemon then keeps running normally.
+systemd:
+	mkdir -p "$(HOME)/.local/bin" "$(HOME)/.config/quava" "$(HOME)/.config/systemd/user"
+	go build -o "$(HOME)/.local/bin/quavad" ./quavad
+	install -m 0644 systemd/quavad.service "$(HOME)/.config/systemd/user/quavad.service"
+	install -m 0644 systemd/quavad.socket "$(HOME)/.config/systemd/user/quavad.socket"
+	systemctl --user daemon-reload
+	systemctl --user enable --now quavad.socket
+
+	@echo "\n Quava installed to systemd."
+
+# Full purge of Quava from systemd, including the binary, config, and systemd unit files.
+clean-systemd:
+	systemctl --user disable --now quavad.socket
+	rm -f "$(HOME)/.config/systemd/user/quavad.service" "$(HOME)/.config/systemd/user/quavad.socket"
+	rm -f "$(HOME)/.local/bin/quavad"
+	rm -rf "$(HOME)/.config/quava"
+	systemctl --user daemon-reload
+
+	@echo "\n Quava uninstalled from systemd."

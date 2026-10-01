@@ -26,25 +26,27 @@ type Store struct {
 	data file
 }
 
-// Path returns the YAML configuration path.
-func (s *Store) Path() string { return s.path }
-
-// Dir returns the directory containing the YAML configuration file.
-func (s *Store) Dir() string { return s.dir }
-
 type file struct {
 	Version  int                          `yaml:"version"`
 	Identity *models.IdentityFile         `yaml:"identity,omitempty"`
 	Devices  map[string]models.PairResult `yaml:"devices,omitempty"`
 }
 
+// Path returns the YAML configuration path.
+func (s *Store) Path() string { return s.path }
+
+// Dir returns the directory containing the YAML configuration file.
+func (s *Store) Dir() string { return s.dir }
+
 // Open loads the store at storageDir. An empty directory uses the OS config
 // location, usually ~/.config/quava.
 func Open(storageDir string) (*Store, error) {
 	dir, err := resolveDir(storageDir)
+
 	if err != nil {
 		return nil, err
 	}
+
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, fmt.Errorf("config: create %s: %w", dir, err)
 	}
@@ -54,19 +56,24 @@ func Open(storageDir string) (*Store, error) {
 		path: filepath.Join(dir, fileName),
 		data: file{Version: currentVersion, Devices: map[string]models.PairResult{}},
 	}
+
 	data, err := os.ReadFile(store.path)
 	if err == nil {
 		if err := yaml.Unmarshal(data, &store.data); err != nil {
 			return nil, fmt.Errorf("config: parse %s: %w", store.path, err)
 		}
+
 		if store.data.Version != currentVersion {
 			return nil, fmt.Errorf("config: unsupported version %d", store.data.Version)
 		}
+
 		if store.data.Devices == nil {
 			store.data.Devices = map[string]models.PairResult{}
 		}
+
 		return store, nil
 	}
+
 	if !errors.Is(err, os.ErrNotExist) {
 		return nil, fmt.Errorf("config: read %s: %w", store.path, err)
 	}
@@ -79,6 +86,7 @@ func (s *Store) Identity() (models.IdentityFile, bool) {
 	if s == nil || s.data.Identity == nil {
 		return models.IdentityFile{}, false
 	}
+
 	return cloneIdentity(*s.data.Identity), true
 }
 
@@ -92,13 +100,17 @@ func (s *Store) Devices() []models.PairResult {
 	if s == nil {
 		return nil
 	}
+
 	devices := make([]models.PairResult, 0, len(s.data.Devices))
+
 	for _, device := range s.data.Devices {
 		devices = append(devices, cloneDevice(device))
 	}
+
 	sort.Slice(devices, func(i, j int) bool {
 		return devices[i].PeerDeviceID < devices[j].PeerDeviceID
 	})
+
 	return devices
 }
 
@@ -107,7 +119,9 @@ func (s *Store) Device(deviceID string) (models.PairResult, bool) {
 	if s == nil {
 		return models.PairResult{}, false
 	}
+
 	device, ok := s.data.Devices[strings.ToLower(strings.TrimSpace(deviceID))]
+
 	return cloneDevice(device), ok
 }
 
@@ -116,33 +130,41 @@ func (s *Store) Lookup(query string) (models.PairResult, bool) {
 	if device, ok := s.Device(query); ok {
 		return device, true
 	}
+
 	query = strings.TrimSpace(query)
+
 	for _, device := range s.Devices() {
 		if device.PeerDeviceName == query {
 			return device, true
 		}
 	}
+
 	return models.PairResult{}, false
 }
 
 // UpsertDevice adds or updates a trusted device by device ID.
 func (s *Store) UpsertDevice(device models.PairResult) error {
 	device.PeerDeviceID = strings.ToLower(strings.TrimSpace(device.PeerDeviceID))
+
 	if device.PeerDeviceID == "" {
 		return errors.New("config: paired device has no device ID")
 	}
+
 	if s.data.Devices == nil {
 		s.data.Devices = map[string]models.PairResult{}
 	}
+
 	s.data.Devices[device.PeerDeviceID] = cloneDevice(device)
+
 	return nil
 }
 
 // Save atomically writes config.yaml with owner-only permissions.
-func (s *Store) Save() error {
+func (s *Store) Save() (resultErr error) {
 	if s == nil {
 		return errors.New("config: nil store")
 	}
+
 	s.data.Version = currentVersion
 	encoded, err := yaml.Marshal(s.data)
 	if err != nil {
@@ -153,26 +175,43 @@ func (s *Store) Save() error {
 	if err != nil {
 		return fmt.Errorf("config: create temporary file: %w", err)
 	}
+
 	temporaryPath := temporary.Name()
-	defer os.Remove(temporaryPath)
+
+	defer func() {
+		if err := os.Remove(temporaryPath); err != nil && !errors.Is(err, os.ErrNotExist) && resultErr == nil {
+			resultErr = fmt.Errorf("config: remove temporary file: %w", err)
+		}
+	}()
+
+	closeTemporary := func() error {
+		if err := temporary.Close(); err != nil {
+			return fmt.Errorf("config: close temporary file: %w", err)
+		}
+
+		return nil
+	}
+
 	if err := temporary.Chmod(0o600); err != nil {
-		temporary.Close()
-		return fmt.Errorf("config: protect temporary file: %w", err)
+		return errors.Join(fmt.Errorf("config: protect temporary file: %w", err), closeTemporary())
 	}
+
 	if _, err := temporary.Write(encoded); err != nil {
-		temporary.Close()
-		return fmt.Errorf("config: write temporary file: %w", err)
+		return errors.Join(fmt.Errorf("config: write temporary file: %w", err), closeTemporary())
 	}
+
 	if err := temporary.Sync(); err != nil {
-		temporary.Close()
-		return fmt.Errorf("config: sync temporary file: %w", err)
+		return errors.Join(fmt.Errorf("config: sync temporary file: %w", err), closeTemporary())
 	}
-	if err := temporary.Close(); err != nil {
-		return fmt.Errorf("config: close temporary file: %w", err)
+
+	if err := closeTemporary(); err != nil {
+		return err
 	}
+
 	if err := os.Rename(temporaryPath, s.path); err != nil {
 		return fmt.Errorf("config: replace %s: %w", s.path, err)
 	}
+
 	return nil
 }
 
@@ -180,14 +219,19 @@ func resolveDir(storageDir string) (string, error) {
 	if strings.TrimSpace(storageDir) != "" {
 		return storageDir, nil
 	}
+
 	base, err := os.UserConfigDir()
 	if err != nil {
 		return "", fmt.Errorf("config: resolve config directory: %w", err)
 	}
+
 	return filepath.Join(base, "quava"), nil
 }
 
-func ptrIdentity(identity models.IdentityFile) *models.IdentityFile { return &identity }
+// surely there's a better way to do this
+func ptrIdentity(identity models.IdentityFile) *models.IdentityFile {
+	return &identity
+}
 
 func cloneIdentity(identity models.IdentityFile) models.IdentityFile {
 	identity.PrivateKey = append(identity.PrivateKey[:0:0], identity.PrivateKey...)

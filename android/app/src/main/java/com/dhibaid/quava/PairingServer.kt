@@ -34,6 +34,8 @@ class PairingServer(
     private val _state = MutableStateFlow(PairingState())
     val state: StateFlow<PairingState> = _state.asStateFlow()
 
+    fun localDeviceIdHex(): String = protocol.localDeviceIdHex()
+
     private var serverSocket: ServerSocket? = null
     private var activePairing: PairingProtocol.Session? = null
     private var activeSocket: Socket? = null
