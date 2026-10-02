@@ -1,4 +1,4 @@
-.PHONY: lint systemd clean-systemd
+.PHONY: lint systemd clean-systemd update-systemd stop-systemd
 
 lint:
 	cd cli && go mod tidy && go vet ./... && golangci-lint run && staticcheck ./... && cd ..
@@ -18,8 +18,10 @@ systemd:
 	systemctl --user enable --now quavad.service
 	systemctl --user restart quavad.socket
 	systemctl --user restart quavad.service
-
-	echo "export PATH=\"$(HOME)/.local/bin:\$$PATH\"" >> "$(HOME)/.bashrc"
+	@if ! echo ":$$PATH:" | grep -q ":$(HOME)/.local/bin:"; then \
+		echo 'export PATH="$(HOME)/.local/bin:$$PATH"' >> "$(HOME)/.bashrc"; \
+		echo "Added $(HOME)/.local/bin to PATH in .bashrc"; \
+	fi
 
 	@echo "Quava installed to systemd."
 
@@ -31,7 +33,7 @@ update-systemd:
 	systemctl --user daemon-reload
 	systemctl --user restart quavad.socket
 	systemctl --user restart quavad.service
-	
+
 	@echo "Quava updated in systemd."
 
 # Full purge of Quava from systemd, including the binary, config, and systemd unit files.
@@ -44,3 +46,11 @@ clean-systemd:
 	systemctl --user daemon-reload
 
 	@echo "Quava uninstalled from systemd."
+
+# Stop the systemd service, I use KDE-Connect (until Quava is mature enough)
+stop-systemd:
+	systemctl --user stop quavad.service
+	systemctl --user daemon-reload
+
+	@echo "Quava service stopped."
+
