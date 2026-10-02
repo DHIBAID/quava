@@ -9,10 +9,12 @@ import (
 	"github.com/spf13/cobra"
 )
 
+var discoverTimeout time.Duration
+
 var Discover = &cobra.Command{
-	Use:   "discover [--timeout 10s]",
+	Use:   "discover",
 	Short: "Discover devices on the network.",
-	Long:  `Discover devices on the network. Optionally specify a timeout for the discovery process.`,
+	Long:  "Discover devices on the network. Optionally specify a timeout for the discovery process.",
 
 	RunE: func(command *cobra.Command, args []string) error {
 		return discover(args)
@@ -20,15 +22,30 @@ var Discover = &cobra.Command{
 }
 
 func discover(args []string) error {
-	timeout, rest := utils.ParseTimeout("discover", args, 10*time.Second)
-
-	if len(rest) != 0 {
-		return fmt.Errorf("invalid number of arguments")
+	if len(args) != 0 {
+		return fmt.Errorf("discover does not accept positional arguments")
 	}
 
 	var res models.Response
 
-	utils.Call(models.Request{Command: "discover", TimeoutMS: timeout.Milliseconds()}, &res)
+	utils.Call(
+		models.Request{
+			Command:   "discover",
+			TimeoutMS: discoverTimeout.Milliseconds(),
+		},
+		&res,
+	)
+
 	utils.PrintReply(res)
 	return nil
+}
+
+func init() {
+	Discover.Flags().DurationVarP(
+		&discoverTimeout,
+		"timeout",
+		"t",
+		10*time.Second,
+		"Discovery timeout",
+	)
 }

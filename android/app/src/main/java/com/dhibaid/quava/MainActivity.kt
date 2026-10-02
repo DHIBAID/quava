@@ -18,10 +18,25 @@ class MainActivity : ComponentActivity() {
     private val conn = object : ServiceConnection {
         override fun onServiceConnected(n: ComponentName, b: IBinder) {
             service = (b as QuavaService.LocalBinder).service()
+
+            if (intent.getBooleanExtra("STOP_RING", false)) {
+                service?.stopRing()
+                intent.removeExtra("STOP_RING")
+            }
         }
 
         override fun onServiceDisconnected(n: ComponentName) {
             service = null
+        }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+
+        if (intent.getBooleanExtra("STOP_RING", false)) {
+            service?.stopRing()
+            intent.removeExtra("STOP_RING")
         }
     }
 

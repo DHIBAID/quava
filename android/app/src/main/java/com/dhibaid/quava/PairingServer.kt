@@ -177,6 +177,7 @@ class PairingServer(
                 quavaService?.onConnected(hostName)
             },
             onPing = { quavaService?.onPing(peerName) },
+            onRing = { quavaService?.onRing(peerName) }
         )
     }
 

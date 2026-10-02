@@ -26,6 +26,7 @@ import javax.crypto.KeyAgreement
 import javax.crypto.Mac
 import javax.crypto.spec.SecretKeySpec
 
+
 /** Wire-compatible responder for daemon/libquava's pairing.Initiate. */
 class PairingProtocol(private val appContext: Context) {
     private val random = SecureRandom()
@@ -260,6 +261,7 @@ class PairingProtocol(private val appContext: Context) {
         session: RuntimeSession,
         onReady: (String) -> Unit,
         onPing: () -> Unit,
+        onRing: () -> Unit,
     ) {
         while (!session.socket.isClosed) {
             Log.d("Quava", "Waiting for session message...")
@@ -297,6 +299,20 @@ class PairingProtocol(private val appContext: Context) {
                     )
 
                     if (!silent) onPing()
+                }
+
+                RING -> {
+                    Log.d("Quava", "Received RING")
+                    writeMessage(
+                        session.output,
+                        Message(
+                            type = RING_ACK,
+                            message.transactionId,
+                            payload = emptyMap(),
+                        ),
+                    )
+
+                    onRing()
                 }
 
                 else -> {
@@ -540,6 +556,8 @@ class PairingProtocol(private val appContext: Context) {
         private const val SESSION_READY = 0x13L
         private const val PING = 0x20L
         private const val PONG = 0x21L
+        private const val RING = 0x22L
+        private const val RING_ACK = 0x23L
         private const val PING_SILENT = 0
         private const val MAX_FRAME_BYTES = 64 * 1024
         private const val PAIRING_TIMEOUT_MS = 120_000

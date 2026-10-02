@@ -107,6 +107,7 @@ func systemdListener() (net.Listener, bool, error) {
 
 	return listener, true, nil
 }
+
 func fatal(err error) {
 	fmt.Fprintln(os.Stderr, "quavad:", err)
 	os.Exit(1)
@@ -144,6 +145,9 @@ func (d *Daemon) handle(connection net.Conn) {
 
 	case "ping":
 		d.ping(req, encoder)
+
+	case "ring":
+		d.ring(req, encoder)
 
 	default:
 		_ = encoder.Encode(models.Response{Error: fmt.Sprintf("unsupported daemon command %q", req.Command)})
@@ -343,6 +347,34 @@ func (d *Daemon) ping(req models.Request, enc *json.Encoder) {
 	defer cancel()
 
 	if err := active.SendPing(ctx); err != nil {
+		_ = enc.Encode(models.Response{Error: err.Error()})
+		return
+	}
+
+	_ = enc.Encode(models.Response{})
+}
+
+func (d *Daemon) ring(req models.Request, enc *json.Encoder) {
+	d.mu.Lock()
+
+	managed := d.sessions[req.PeerDeviceID]
+	var active *session.Session
+
+	if managed != nil {
+		active = managed.Active
+	}
+
+	d.mu.Unlock()
+
+	if active == nil {
+		_ = enc.Encode(models.Response{Error: "no active session; use connect first"})
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), utils.Duration(req.TimeoutMS, 15*time.Second))
+	defer cancel()
+
+	if err := active.SendRing(ctx); err != nil {
 		_ = enc.Encode(models.Response{Error: err.Error()})
 		return
 	}

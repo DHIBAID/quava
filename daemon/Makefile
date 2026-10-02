@@ -17,7 +17,18 @@ systemd:
 	systemctl --user enable --now quavad.socket
 	echo "export PATH=\"$(HOME)/.local/bin:\$$PATH\"" >> "$(HOME)/.bashrc"
 
-	@echo "\n Quava installed to systemd."
+	@echo "Quava installed to systemd."
+
+
+# Update the systemd binaries and restart the services to update quava, quavad, and the socket. 
+update-systemd:
+	go build -o "$(HOME)/.local/bin/quavad" ./quavad
+	go build -o "$(HOME)/.local/bin/quava" ./cli
+	systemctl --user daemon-reload
+	systemctl --user restart quavad.socket
+	systemctl --user restart quavad.service
+	
+	@echo "Quava updated in systemd."
 
 # Full purge of Quava from systemd, including the binary, config, and systemd unit files.
 clean-systemd:
@@ -28,4 +39,4 @@ clean-systemd:
 	rm -rf "$(HOME)/.config/quava"
 	systemctl --user daemon-reload
 
-	@echo "\n Quava uninstalled from systemd."
+	@echo "Quava uninstalled from systemd."

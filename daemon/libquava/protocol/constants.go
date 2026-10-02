@@ -23,6 +23,9 @@ const (
 	MessageTypePing    = 0x20
 	MessageTypePingAck = 0x21
 
+	MessageTypeRing    = 0x22
+	MessageTypeRingAck = 0x23
+
 	// PingPayloadSilent marks a heartbeat Ping that should not generate a
 	// user-visible notification on the receiving device.
 	PingPayloadSilent = 0

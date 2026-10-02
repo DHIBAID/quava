@@ -11,6 +11,7 @@ func init() {
 		commands.Ping,
 		commands.Devices,
 		commands.Pair,
+		commands.Ring,
 	)
 }
 
