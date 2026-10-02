@@ -15,6 +15,10 @@ systemd:
 	install -m 0644 systemd/quavad.socket "$(HOME)/.config/systemd/user/quavad.socket"
 	systemctl --user daemon-reload
 	systemctl --user enable --now quavad.socket
+	systemctl --user enable --now quavad.service
+	systemctl --user restart quavad.socket
+	systemctl --user restart quavad.service
+
 	echo "export PATH=\"$(HOME)/.local/bin:\$$PATH\"" >> "$(HOME)/.bashrc"
 
 	@echo "Quava installed to systemd."

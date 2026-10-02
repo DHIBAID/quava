@@ -1,3 +1,3 @@
 module quavad
 
-go 1.27rc2
+go 1.27.1
