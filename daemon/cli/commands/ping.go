@@ -2,18 +2,28 @@ package commands
 
 import (
 	"fmt"
-	"os"
 	"quava-cli/models"
 	"quava-cli/utils"
 	"time"
+
+	"github.com/spf13/cobra"
 )
 
-func Ping(args []string) {
+var Ping = &cobra.Command{
+	Use:   "ping <peer-device-id> [--timeout 10s]",
+	Short: "Ping a device on the network.",
+	Long:  `Ping a device on the network using its peer device ID.`,
+
+	RunE: func(command *cobra.Command, args []string) error {
+		return ping(args)
+	},
+}
+
+func ping(args []string) error {
 	timeout := time.Duration(0)
 
 	if len(args) != 1 {
-		utils.Usage()
-		os.Exit(2)
+		return fmt.Errorf("invalid number of arguments")
 	}
 
 	var res models.Response
@@ -24,8 +34,9 @@ func Ping(args []string) {
 	}, &res)
 
 	if res.Error != "" {
-		utils.Fail(res.Error)
+		return fmt.Errorf("error from daemon: %s", res.Error)
 	}
 
 	fmt.Printf("%s requested for %s\n", "ping", args[0])
+	return nil
 }

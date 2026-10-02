@@ -6,9 +6,21 @@ import (
 	"quava-cli/models"
 	"quava-cli/utils"
 	"time"
+
+	"github.com/spf13/cobra"
 )
 
-func Connect(args []string) {
+var Connect = &cobra.Command{
+	Use:   "connect <peer-device-id>",
+	Short: "Connect to a peer device.",
+	Long:  `Connect to a peer device by providing its device ID.`,
+
+	RunE: func(command *cobra.Command, args []string) error {
+		return connect(args)
+	},
+}
+
+func connect(args []string) error {
 	timeout := time.Duration(0)
 
 	if len(args) != 1 {
@@ -24,8 +36,9 @@ func Connect(args []string) {
 	}, &res)
 
 	if res.Error != "" {
-		utils.Fail(res.Error)
+		return fmt.Errorf("daemon returned error: %s", res.Error)
 	}
 
 	fmt.Printf("%s requested for %s\n", "connect", args[0])
+	return nil
 }

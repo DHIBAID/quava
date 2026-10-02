@@ -10,10 +10,12 @@ lint:
 systemd:
 	mkdir -p "$(HOME)/.local/bin" "$(HOME)/.config/quava" "$(HOME)/.config/systemd/user"
 	go build -o "$(HOME)/.local/bin/quavad" ./quavad
+	go build -o "$(HOME)/.local/bin/quava" ./cli
 	install -m 0644 systemd/quavad.service "$(HOME)/.config/systemd/user/quavad.service"
 	install -m 0644 systemd/quavad.socket "$(HOME)/.config/systemd/user/quavad.socket"
 	systemctl --user daemon-reload
 	systemctl --user enable --now quavad.socket
+	echo "export PATH=\"$(HOME)/.local/bin:\$$PATH\"" >> "$(HOME)/.bashrc"
 
 	@echo "\n Quava installed to systemd."
 
@@ -22,6 +24,7 @@ clean-systemd:
 	systemctl --user disable --now quavad.socket
 	rm -f "$(HOME)/.config/systemd/user/quavad.service" "$(HOME)/.config/systemd/user/quavad.socket"
 	rm -f "$(HOME)/.local/bin/quavad"
+	rm -f "$(HOME)/.local/bin/quava"
 	rm -rf "$(HOME)/.config/quava"
 	systemctl --user daemon-reload
 
