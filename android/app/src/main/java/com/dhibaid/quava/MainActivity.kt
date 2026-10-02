@@ -27,6 +27,7 @@ class MainActivity : ComponentActivity() {
 
         override fun onServiceDisconnected(n: ComponentName) {
             service = null
+            
         }
     }
 

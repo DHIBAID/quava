@@ -257,11 +257,12 @@ class PairingProtocol(private val appContext: Context) {
         return RuntimeSession(socket, input, output, hello.transactionId, peerId, peerName)
     }
 
-    internal fun runSession(
+    internal suspend fun runSession(
         session: RuntimeSession,
         onReady: (String) -> Unit,
         onPing: () -> Unit,
         onRing: () -> Unit,
+        onClipboardSync: suspend (Message) -> Unit,
     ) {
         while (!session.socket.isClosed) {
             Log.d("Quava", "Waiting for session message...")
@@ -306,13 +307,28 @@ class PairingProtocol(private val appContext: Context) {
                     writeMessage(
                         session.output,
                         Message(
-                            type = RING_ACK,
+                            RING_ACK,
                             message.transactionId,
-                            payload = emptyMap(),
+                            emptyMap(),
                         ),
                     )
 
                     onRing()
+                }
+
+                CLIPBOARD -> {
+                    Log.d("Quava", "Received Clipboard Sync")
+
+                    onClipboardSync(message)
+
+                    writeMessage(
+                        session.output,
+                        Message(
+                            CLIPBOARD_ACK,
+                            message.transactionId,
+                            emptyMap(),
+                        ),
+                    )
                 }
 
                 else -> {
@@ -558,6 +574,8 @@ class PairingProtocol(private val appContext: Context) {
         private const val PONG = 0x21L
         private const val RING = 0x22L
         private const val RING_ACK = 0x23L
+        private const val CLIPBOARD = 0x24L
+        private const val CLIPBOARD_ACK = 0x25L
         private const val PING_SILENT = 0
         private const val MAX_FRAME_BYTES = 64 * 1024
         private const val PAIRING_TIMEOUT_MS = 120_000

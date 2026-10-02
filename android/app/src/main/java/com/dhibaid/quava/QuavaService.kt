@@ -16,6 +16,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import android.util.Log
+import com.quava.android.services.ClipboardService
 
 class QuavaService : Service() {
 
@@ -26,6 +27,7 @@ class QuavaService : Service() {
 
     private lateinit var mdns: MdnsAdvertiser
     private lateinit var ringController: RingController
+    private lateinit var clipboardService: ClipboardService
 
     private val ringTimeoutHandler = Handler(Looper.getMainLooper())
 
@@ -79,6 +81,12 @@ class QuavaService : Service() {
         server = PairingServer(scope, this)
         mdns = MdnsAdvertiser(this)
         ringController = RingController(this)
+
+        clipboardService = ClipboardService(applicationContext) { content ->
+            Log.d("QuavaClipboard", "Local clipboard changed: ${content.size} bytes")
+        }
+
+        clipboardService.start()
 
         if (server.start(PORT)) {
             mdns.start(PORT, server.localDeviceIdHex())
@@ -196,6 +204,15 @@ class QuavaService : Service() {
         super.onDestroy()
     }
 
+    internal suspend fun onClipboardSync(message: PairingProtocol.Message) {
+        val contentType = message.payload[1] as? String ?: return
+        val content = message.payload[2] as? ByteArray ?: return
+
+        if (contentType == "text") {
+            clipboardService.applyRemoteClipboard(content)
+        }
+    }
+
     private fun foregroundNotification(text: String) =
         NotificationCompat.Builder(this, CHANNEL)
             .setContentTitle("Quava")
@@ -215,6 +232,7 @@ class QuavaService : Service() {
             },
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
+
 
     companion object {
         const val PORT = 48273

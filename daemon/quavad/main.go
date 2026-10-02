@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net"
 	"os"
 	"path/filepath"
@@ -17,6 +18,7 @@ import (
 	"sync"
 	"time"
 
+	"libquava/clipboard"
 	"libquava/config"
 	"libquava/discovery"
 	lq "libquava/models"
@@ -27,10 +29,11 @@ import (
 )
 
 type Daemon struct {
-	store    *config.Store
-	listener net.Listener
-	mu       sync.Mutex
-	sessions map[string]*models.ManagedSession
+	store     *config.Store
+	listener  net.Listener
+	mu        sync.Mutex
+	sessions  map[string]*models.ManagedSession
+	clipboard *clipboard.ClipboardService
 }
 
 func main() {
@@ -67,6 +70,16 @@ func main() {
 		sessions: map[string]*models.ManagedSession{},
 	}
 
+	d.clipboard = clipboard.NewClipboardService(d.pushClipboardContent)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	if err := d.clipboard.StartClipboardService(ctx); err != nil {
+		log.Printf("clipboard: failed to start: %v", err)
+	}
+	defer d.clipboard.StopClipboardService()
+
 	defer func() {
 		_ = listener.Close()
 		if !socketActivated {
@@ -82,6 +95,33 @@ func main() {
 
 		go d.handle(connection)
 	}
+}
+
+func (d *Daemon) pushClipboardContent(
+	ctx context.Context,
+	content lq.ClipboardContent,
+) error {
+	d.mu.Lock()
+
+	activeSessions := make([]*session.Session, 0, len(d.sessions))
+
+	for _, managed := range d.sessions {
+		if managed.Active != nil {
+			activeSessions = append(activeSessions, managed.Active)
+		}
+	}
+
+	d.mu.Unlock()
+
+	var errs []error
+
+	for _, active := range activeSessions {
+		if err := active.SyncClipboard(ctx, content); err != nil {
+			errs = append(errs, err)
+		}
+	}
+
+	return errors.Join(errs...)
 }
 
 // systemd passes an already-bound listener as file descriptor 3. Keeping the

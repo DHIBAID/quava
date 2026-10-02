@@ -83,9 +83,10 @@ class PairingServer(
         }
     }
 
-    private fun handle(socket: Socket) {
+    private suspend fun handle(socket: Socket) {
         try {
             val first = protocol.readInitial(socket)
+
             when (first.type) {
                 PairingProtocol.PAIR_REQUEST -> handlePairing(socket, first)
                 PairingProtocol.SESSION_HELLO -> handleSession(socket, first)
@@ -95,6 +96,7 @@ class PairingServer(
             socket.closeQuietly()
         } catch (e: Exception) {
             Log.w(TAG, "connection failed: ${e.message}")
+
             update {
                 it.copy(
                     confirmationPending = false,
@@ -111,6 +113,7 @@ class PairingServer(
                 if (activePairing?.socket === socket) activePairing = null
                 if (activeSocket === socket) activeSocket = null
             }
+
             socket.closeQuietly()
         }
     }
@@ -144,10 +147,11 @@ class PairingServer(
         }
     }
 
-    private fun handleSession(
+    private suspend fun handleSession(
         socket: Socket,
         first: PairingProtocol.Message,
     ) {
+
         val session = protocol.beginSession(socket, first)
         var peerName = session.peerName
 
@@ -161,6 +165,7 @@ class PairingServer(
             session = session,
             onReady = { hostName ->
                 peerName = hostName
+
                 Log.d(
                     "QuavaSession",
                     "Session established with Linux host: $hostName"
@@ -177,8 +182,11 @@ class PairingServer(
                 quavaService?.onConnected(hostName)
             },
             onPing = { quavaService?.onPing(peerName) },
-            onRing = { quavaService?.onRing(peerName) }
-        )
+            onRing = { quavaService?.onRing(peerName) },
+            onClipboardSync = { message ->
+                quavaService?.onClipboardSync(message)
+            })
+
     }
 
     fun confirmPairing() {
