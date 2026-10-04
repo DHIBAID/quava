@@ -27,10 +27,23 @@ type Store struct {
 }
 
 type file struct {
-	Version  int                          `yaml:"version"`
-	Identity *models.IdentityFile         `yaml:"identity,omitempty"`
-	Devices  map[string]models.PairResult `yaml:"devices,omitempty"`
+	Version          int                                  `yaml:"version"`
+	Identity         *models.IdentityFile                 `yaml:"identity,omitempty"`
+	Devices          map[string]models.PairResult         `yaml:"devices,omitempty"`
+	NotificationSync map[string]NotificationSyncDirection `yaml:"notification_sync,omitempty"`
 }
+
+// NotificationSyncDirection controls notification flow for one paired device.
+// An absent setting is treated as ToHost so Android notifications are rendered
+// on Linux without forwarding host notifications to Android.
+type NotificationSyncDirection string
+
+const (
+	NotificationSyncBoth     NotificationSyncDirection = "both"
+	NotificationSyncNone     NotificationSyncDirection = "none"
+	NotificationSyncToClient NotificationSyncDirection = "toClient"
+	NotificationSyncToHost   NotificationSyncDirection = "toHost"
+)
 
 // Path returns the YAML configuration path.
 func (s *Store) Path() string { return s.path }
@@ -54,7 +67,7 @@ func Open(storageDir string) (*Store, error) {
 	store := &Store{
 		dir:  dir,
 		path: filepath.Join(dir, fileName),
-		data: file{Version: currentVersion, Devices: map[string]models.PairResult{}},
+		data: file{Version: currentVersion, Devices: map[string]models.PairResult{}, NotificationSync: map[string]NotificationSyncDirection{}},
 	}
 
 	data, err := os.ReadFile(store.path)
@@ -69,6 +82,9 @@ func Open(storageDir string) (*Store, error) {
 
 		if store.data.Devices == nil {
 			store.data.Devices = map[string]models.PairResult{}
+		}
+		if store.data.NotificationSync == nil {
+			store.data.NotificationSync = map[string]NotificationSyncDirection{}
 		}
 
 		return store, nil
@@ -140,6 +156,45 @@ func (s *Store) Lookup(query string) (models.PairResult, bool) {
 	}
 
 	return models.PairResult{}, false
+}
+
+// NotificationSync returns the notification direction for deviceID. Paired
+// devices without an explicit setting receive Android-to-Linux sync only.
+func (s *Store) NotificationSync(deviceID string) NotificationSyncDirection {
+	if s == nil {
+		return NotificationSyncToHost
+	}
+
+	direction := s.data.NotificationSync[strings.ToLower(strings.TrimSpace(deviceID))]
+	if validNotificationSyncDirection(direction) {
+		return direction
+	}
+	return NotificationSyncToHost
+}
+
+// SetNotificationSync persists a notification direction for one paired device.
+func (s *Store) SetNotificationSync(deviceID string, direction NotificationSyncDirection) error {
+	deviceID = strings.ToLower(strings.TrimSpace(deviceID))
+	if deviceID == "" {
+		return errors.New("config: paired device has no device ID")
+	}
+	if !validNotificationSyncDirection(direction) {
+		return fmt.Errorf("config: invalid notification sync direction %q", direction)
+	}
+	if s.data.NotificationSync == nil {
+		s.data.NotificationSync = map[string]NotificationSyncDirection{}
+	}
+	s.data.NotificationSync[deviceID] = direction
+	return nil
+}
+
+func validNotificationSyncDirection(direction NotificationSyncDirection) bool {
+	switch direction {
+	case NotificationSyncBoth, NotificationSyncNone, NotificationSyncToClient, NotificationSyncToHost:
+		return true
+	default:
+		return false
+	}
 }
 
 // UpsertDevice adds or updates a trusted device by device ID.

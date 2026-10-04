@@ -15,6 +15,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
 import android.util.Log
 import com.quava.android.services.ClipboardService
 
@@ -28,6 +29,7 @@ class QuavaService : Service() {
     private lateinit var mdns: MdnsAdvertiser
     private lateinit var ringController: RingController
     private lateinit var clipboardService: ClipboardService
+    private lateinit var hostNotificationManager: HostNotificationManager
 
     private val ringTimeoutHandler = Handler(Looper.getMainLooper())
 
@@ -81,6 +83,11 @@ class QuavaService : Service() {
         server = PairingServer(scope, this)
         mdns = MdnsAdvertiser(this)
         ringController = RingController(this)
+        hostNotificationManager = HostNotificationManager(this)
+        NotificationTransport.sender = { notification -> scope.launch(Dispatchers.IO) { server.sendAndroidNotification(notification) } }
+        NotificationTransport.dismissSender = { key -> scope.launch(Dispatchers.IO) { server.sendAndroidNotificationDismiss(key) } }
+        NotificationForwarder.forwardActive()
+
 
         clipboardService = ClipboardService(applicationContext) { content ->
             Log.d("QuavaClipboard", "Local clipboard changed: ${content.size} bytes")
@@ -100,6 +107,19 @@ class QuavaService : Service() {
     ): Int {
         when (intent?.action) {
             ACTION_STOP_RING -> stopRing()
+            ACTION_CLEAR_HOST_NOTIFICATION -> {
+                val id = intent.getIntExtra(EXTRA_NOTIFICATION_ID, -1)
+                if (id >= 0) {
+                    Log.i(TAG, "Clearing host notification $id after Android dismissal")
+                    scope.launch(Dispatchers.IO) {
+                        server.sendNotificationClear(id)
+                    }
+                    try {
+                        hostNotificationManager.dismiss(id)
+                    } catch (_: Exception) {
+                    }
+                }
+            }
         }
 
         return START_STICKY
@@ -201,6 +221,8 @@ class QuavaService : Service() {
         }
 
         scope.cancel()
+        NotificationTransport.sender = null
+        NotificationTransport.dismissSender = null
         super.onDestroy()
     }
 
@@ -211,6 +233,84 @@ class QuavaService : Service() {
         if (contentType == "text") {
             clipboardService.applyRemoteClipboard(content)
         }
+    }
+
+    internal suspend fun onNotificationSync(message: PairingProtocol.Message) {
+        Log.d("QuavaNotif", "Notification sync received")
+
+        val notification = decodeHostNotification(message)
+        if (notification == null) {
+            Log.e("QuavaNotif", "Failed to decode notification")
+            return
+        }
+
+        Log.d(
+            "QuavaNotif",
+            "Decoded: app=${notification.appName}, " +
+                    "title=${notification.title}, body=${notification.body}, " +
+                    "id=${notification.id}"
+        )
+
+        hostNotificationManager.show(notification)
+        Log.d("QuavaNotif", "show() invoked")
+    }
+
+    internal suspend fun onNotificationClear(message: PairingProtocol.Message) {
+        val id = (message.payload[1] as? Number)?.toInt() ?: -1
+        Log.d("QuavaNotif", "Notification clear received id=$id")
+        if (id >= 0) {
+            if (!hostNotificationManager.dismiss(id)) {
+                hostNotificationManager.dismissAll()
+            }
+        } else {
+            hostNotificationManager.dismissAll()
+        }
+    }
+
+    internal suspend fun onAndroidNotificationAction(message: PairingProtocol.Message) {
+        val key = message.payload[1] as? String ?: return
+        val action = (message.payload[2] as? Number)?.toInt() ?: return
+        val performed = NotificationForwarder.performAction(key, action, message.payload[3] as? String ?: "")
+        Log.i("QuavaNotif", "Android notification action key=$key action=$action performed=$performed")
+    }
+
+    internal suspend fun onAndroidNotificationDismiss(message: PairingProtocol.Message) {
+        val key = message.payload[1] as? String ?: return
+        Log.i("QuavaNotif", "Android notification dismissal key=$key performed=${NotificationForwarder.dismiss(key)}")
+    }
+
+    private fun decodeHostNotification(
+        message: PairingProtocol.Message
+    ): HostNotification? {
+        val payload = message.payload
+
+        fun get(key: Int): Any? = payload[key]
+
+        val appName = get(1) as? String
+        val replacesId = (get(2) as? Number)?.toInt() ?: 0
+        val appIcon = get(3) as? String ?: ""
+        val iconData = get(9) as? ByteArray
+        val summary = get(4) as? String
+        val body = get(5) as? String ?: ""
+
+        if (appName == null || summary == null) {
+            Log.e(
+                "QuavaNotif",
+                "Decode failed: appName=${get(1)?.let { it::class.simpleName }}, " +
+                        "summary=${get(4)?.let { it::class.simpleName }}, " +
+                        "keys=${payload.keys}"
+            )
+            return null
+        }
+
+        return HostNotification(
+            id = replacesId,
+            appName = appName,
+            title = summary,
+            body = body,
+            icon = appIcon,
+            iconData = iconData,
+        )
     }
 
     private fun foregroundNotification(text: String) =
@@ -238,9 +338,11 @@ class QuavaService : Service() {
         const val PORT = 48273
 
         const val EXTRA_STOP_RING = "STOP_RING"
+        const val EXTRA_NOTIFICATION_ID = "NOTIFICATION_ID"
 
         private const val TAG = "QuavaRing"
         private const val ACTION_STOP_RING = "com.dhibaid.quava.STOP_RING"
+        const val ACTION_CLEAR_HOST_NOTIFICATION = "com.dhibaid.quava.CLEAR_HOST_NOTIFICATION"
 
         private const val CHANNEL = "quava"
         private const val PING_CHANNEL = "quava_pings"

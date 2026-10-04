@@ -14,6 +14,7 @@ import (
 
 	"libquava/crypto"
 	"libquava/models"
+	"libquava/notifications"
 	"libquava/protocol"
 )
 
@@ -29,9 +30,13 @@ type Session struct {
 	localPublic ed25519.PublicKey
 	txID        []byte
 
-	pingMutex sync.Mutex
-	// pendingMutex sync.Mutex
-	// pending      map[models.TransactionID]chan protocol.Message
+	pingMutex           sync.Mutex
+	pendingMutex        sync.Mutex
+	pending             map[string]chan protocol.Message
+	readerOnce          sync.Once
+	readDone            chan error
+	closeNotification   func(uint32) error
+	androidNotification func(context.Context, models.AndroidNotificationContent) error
 }
 
 func Connect(ctx context.Context, conn *protocol.Conn, identity models.IdentityFile, peer models.PairResult) (*Session, error) {
@@ -145,11 +150,13 @@ func Connect(ctx context.Context, conn *protocol.Conn, identity models.IdentityF
 	log.Printf("SESSION_READY: write succeeded")
 
 	return &Session{
-		conn:        conn,
-		peer:        peer,
-		localID:     localID,
-		localPublic: identity.PublicKey,
-		txID:        txID,
+		conn:              conn,
+		peer:              peer,
+		localID:           localID,
+		localPublic:       identity.PublicKey,
+		txID:              txID,
+		pending:           make(map[string]chan protocol.Message),
+		closeNotification: notifications.CloseNotification,
 	}, nil
 }
 
@@ -226,7 +233,15 @@ func NewServerSession(ctx context.Context, conn *protocol.Conn, identity models.
 	if err := conn.WriteMessage(ctx, protocol.NewMessage(protocol.MessageTypeSessionReady, first.TransactionID, payload)); err != nil {
 		return nil, err
 	}
-	return &Session{conn: conn, peer: peer, localID: localID, localPublic: identity.PublicKey, txID: append([]byte(nil), first.TransactionID...)}, nil
+	return &Session{
+		conn:              conn,
+		peer:              peer,
+		localID:           localID,
+		localPublic:       identity.PublicKey,
+		txID:              append([]byte(nil), first.TransactionID...),
+		pending:           make(map[string]chan protocol.Message),
+		closeNotification: notifications.CloseNotification,
+	}, nil
 }
 
 // Run maintains a session to a trusted peer. It reconnects after transport loss
@@ -282,6 +297,7 @@ func Run(ctx context.Context, identity models.IdentityFile, peer models.PairResu
 			continue
 		}
 		backoff = time.Second
+		s.startDispatcher(ctx)
 		if onConnect != nil {
 			onConnect(s)
 		}
@@ -299,10 +315,14 @@ func Run(ctx context.Context, identity models.IdentityFile, peer models.PairResu
 func (s *Session) RunHeartbeat(ctx context.Context) error {
 	ticker := time.NewTicker(heartbeatInterval)
 	defer ticker.Stop()
+	s.startDispatcher(ctx)
+
 	for {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
+		case err := <-s.readDone:
+			return err
 		case <-ticker.C:
 			heartbeatCtx, cancel := context.WithTimeout(ctx, sessionTimeout)
 			err := s.sendHeartbeat(heartbeatCtx)
@@ -318,23 +338,147 @@ func (s *Session) sendHeartbeat(ctx context.Context) error {
 	if s == nil || s.conn == nil {
 		return errors.New("session: closed")
 	}
-	s.pingMutex.Lock()
-	defer s.pingMutex.Unlock()
-
 	transactionID, err := crypto.GenerateTransactionID()
 	if err != nil {
 		return err
 	}
 
-	if err := s.conn.WriteMessage(ctx, protocol.NewMessage(protocol.MessageTypePing, transactionID, map[uint64]any{protocol.PingPayloadSilent: true})); err != nil {
-		return err
-	}
-
-	response, err := s.conn.ReadMessage(ctx)
+	response, err := s.sendRequest(ctx, protocol.NewMessage(protocol.MessageTypePing, transactionID, map[uint64]any{protocol.PingPayloadSilent: true}))
 	if err != nil {
 		return err
 	}
 	return protocol.ValidatePong(response, transactionID)
+}
+
+func (s *Session) startDispatcher(ctx context.Context) {
+	s.readerOnce.Do(func() {
+		s.readDone = make(chan error, 1)
+		go func() {
+			for {
+				msg, err := s.conn.ReadMessage(ctx)
+				if err != nil {
+					s.readDone <- err
+					return
+				}
+				if !s.deliverResponse(msg) {
+					s.handleUnsolicited(ctx, msg)
+				}
+			}
+		}()
+	})
+}
+
+// sendRequest registers its response channel before writing, so the sole
+// connection reader cannot receive and discard a fast acknowledgement.
+func (s *Session) sendRequest(ctx context.Context, msg protocol.Message) (protocol.Message, error) {
+	transactionID := msg.TransactionID
+	txIDStr := fmt.Sprintf("%x", transactionID)
+	responseChan := make(chan protocol.Message, 1)
+
+	s.pendingMutex.Lock()
+	s.pending[txIDStr] = responseChan
+	s.pendingMutex.Unlock()
+
+	cleanup := func() {
+		s.pendingMutex.Lock()
+		delete(s.pending, txIDStr)
+		s.pendingMutex.Unlock()
+	}
+
+	s.pingMutex.Lock()
+	err := s.conn.WriteMessage(ctx, msg)
+	s.pingMutex.Unlock()
+	if err != nil {
+		cleanup()
+		return protocol.Message{}, err
+	}
+
+	select {
+	case <-ctx.Done():
+		cleanup()
+		return protocol.Message{}, ctx.Err()
+	case response := <-responseChan:
+		cleanup()
+		return response, nil
+	}
+}
+
+func (s *Session) deliverResponse(msg protocol.Message) bool {
+	txIDStr := fmt.Sprintf("%x", msg.TransactionID)
+
+	s.pendingMutex.Lock()
+	responseChan, found := s.pending[txIDStr]
+	s.pendingMutex.Unlock()
+
+	if found && responseChan != nil {
+		select {
+		case responseChan <- msg:
+			return true
+		default:
+			// Channel not ready or closed, log and continue
+			return false
+		}
+	}
+	return false
+}
+
+func (s *Session) handleUnsolicited(ctx context.Context, msg protocol.Message) {
+	switch msg.Type {
+	case protocol.MessageTypeSyncNotification:
+		if err := s.handleAndroidNotification(ctx, msg); err != nil {
+			log.Printf("session: handle Android notification failed: %v", err)
+		}
+	case protocol.MessageTypeClearNotification:
+		if err := s.handleClearNotification(ctx, msg); err != nil {
+			log.Printf("session: handle clear notification failed: %v", err)
+		}
+	default:
+		// Ignore other unsolicited messages
+	}
+}
+
+// SetAndroidNotificationHandler sets the host-side renderer for notifications
+// received from Android. It must be installed before the session is exposed.
+func (s *Session) SetAndroidNotificationHandler(handler func(context.Context, models.AndroidNotificationContent) error) {
+	s.androidNotification = handler
+}
+
+func (s *Session) handleClearNotification(ctx context.Context, msg protocol.Message) error {
+	if s == nil || s.conn == nil {
+		return errors.New("session: closed")
+	}
+
+	// Extract notification ID from payload (field 1)
+	id, err := protocol.PayloadUint(msg.Payload, 1)
+	if err != nil {
+		return fmt.Errorf("session: invalid clear notification payload: %w", err)
+	}
+
+	// Close the notification on Linux via D-Bus
+	closeNotification := s.closeNotification
+	if closeNotification == nil {
+		closeNotification = notifications.CloseNotification
+	}
+	if err := closeNotification(uint32(id)); err != nil {
+		log.Printf("session: close notification %d failed: %v", id, err)
+		// Don't fail here - we still need to send the ack
+	}
+
+	// Send acknowledgment back to Android
+	ackMsg := protocol.NewMessage(
+		protocol.MessageTypeClearNotificationAck,
+		msg.TransactionID,
+		map[uint64]interface{}{},
+	)
+
+	s.pingMutex.Lock()
+	err = s.conn.WriteMessage(ctx, ackMsg)
+	s.pingMutex.Unlock()
+	if err != nil {
+		return fmt.Errorf("session: send clear notification ack failed: %w", err)
+	}
+
+	return nil
 }
 
 func (s *Session) Close() error {

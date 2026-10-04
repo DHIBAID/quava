@@ -18,9 +18,6 @@ func (s *Session) SyncClipboard(
 		return errors.New("session: closed")
 	}
 
-	s.pingMutex.Lock()
-	defer s.pingMutex.Unlock()
-
 	transactionID, err := crypto.GenerateTransactionID()
 	if err != nil {
 		return err
@@ -33,11 +30,7 @@ func (s *Session) SyncClipboard(
 
 	msg := protocol.NewMessage(protocol.MessageTypeSyncClipboard, transactionID, payload)
 
-	if err := s.conn.WriteMessage(ctx, msg); err != nil {
-		return err
-	}
-
-	response, err := s.conn.ReadMessage(ctx)
+	response, err := s.sendRequest(ctx, msg)
 	if err != nil {
 		return err
 	}

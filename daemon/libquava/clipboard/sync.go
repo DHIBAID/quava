@@ -13,20 +13,20 @@ import (
 	clip "golang.design/x/clipboard"
 )
 
-type PushFunc func(context.Context, models.ClipboardContent) error
+type ClipboardPushFunc func(context.Context, models.ClipboardContent) error
 
 type ClipboardService struct {
 	LastUpdated  time.Time
 	Clipboard    models.ClipboardContent
 	pendingMutex sync.Mutex
 	lifecycle    sync.Mutex
-	push         PushFunc
+	push         ClipboardPushFunc
 	cancel       context.CancelFunc
 	done         chan struct{}
 	started      bool
 }
 
-func NewClipboardService(push PushFunc) *ClipboardService {
+func NewClipboardService(push ClipboardPushFunc) *ClipboardService {
 	return &ClipboardService{
 		push: push,
 	}

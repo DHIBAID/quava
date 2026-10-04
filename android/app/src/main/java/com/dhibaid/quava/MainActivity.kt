@@ -2,14 +2,17 @@ package com.dhibaid.quava
 
 import android.Manifest
 import android.content.*
+import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
 import android.os.IBinder
+import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.*
+import androidx.core.content.ContextCompat
 import com.dhibaid.quava.ui.HomeScreen
 
 class MainActivity : ComponentActivity() {
@@ -27,7 +30,6 @@ class MainActivity : ComponentActivity() {
 
         override fun onServiceDisconnected(n: ComponentName) {
             service = null
-            
         }
     }
 
@@ -44,22 +46,39 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        val intent = Intent(this, QuavaService::class.java)
-        startForegroundService(intent)
-        bindService(intent, conn, BIND_AUTO_CREATE)
+        val serviceIntent = Intent(this, QuavaService::class.java)
+        startForegroundService(serviceIntent)
+        bindService(serviceIntent, conn, BIND_AUTO_CREATE)
 
         setContent {
-            // Android 13+ needs runtime permission for the notification
             val launcher = rememberLauncherForActivityResult(
                 ActivityResultContracts.RequestPermission()
-            ) {}
+            ) { granted ->
+                if (!granted) {
+                    // Permission denied.
+                }
+            }
+
             LaunchedEffect(Unit) {
-                if (Build.VERSION.SDK_INT >= 33) {
+                if (
+                    Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+                    ContextCompat.checkSelfPermission(
+                        this@MainActivity,
+                        Manifest.permission.POST_NOTIFICATIONS
+                    ) != PackageManager.PERMISSION_GRANTED
+                ) {
                     launcher.launch(Manifest.permission.POST_NOTIFICATIONS)
                 }
             }
 
-            service?.let { HomeScreen(it.server) }
+            service?.let {
+                HomeScreen(
+                    server = it.server,
+                    onEnableNotificationAccess = {
+                        startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))
+                    },
+                )
+            }
         }
     }
 

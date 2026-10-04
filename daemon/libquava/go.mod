@@ -11,6 +11,7 @@ require (
 
 require (
 	github.com/ebitengine/purego v0.10.1 // indirect
+	github.com/godbus/dbus/v5 v5.2.2
 	github.com/x448/float16 v0.8.4 // indirect
 	golang.design/x/x11 v0.2.0 // indirect
 	golang.org/x/exp/shiny v0.0.0-20250606033433-dcc06ee1d476 // indirect

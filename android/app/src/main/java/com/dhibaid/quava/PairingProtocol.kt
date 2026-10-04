@@ -31,6 +31,7 @@ import javax.crypto.spec.SecretKeySpec
 class PairingProtocol(private val appContext: Context) {
     private val random = SecureRandom()
     private val provider: Provider = BouncyCastleProvider()
+    private val writeLock = Any()
     private val identity: Identity
 
     init {
@@ -257,12 +258,36 @@ class PairingProtocol(private val appContext: Context) {
         return RuntimeSession(socket, input, output, hello.transactionId, peerId, peerName)
     }
 
+    internal fun sendNotificationClear(session: RuntimeSession, id: Int) {
+        writeMessage(
+            session.output,
+            Message(
+                CLEAR_NOTIFICATION,
+                session.transactionId,
+                mapOf(1 to id),
+            )
+        )
+    }
+
+    internal fun sendAndroidNotification(session: RuntimeSession, notification: NotificationTransport.NotificationData) {
+        val actions = notification.actions.map { mapOf(1 to it.title, 2 to it.hasRemoteInput) }
+        writeMessage(session.output, Message(NOTIFICATION, session.transactionId, mapOf(1 to notification.key, 2 to notification.app, 3 to notification.title, 4 to notification.body, 5 to notification.icon, 6 to actions)))
+    }
+
+    internal fun sendAndroidNotificationDismiss(session: RuntimeSession, key: String) {
+        writeMessage(session.output, Message(DISMISS_ANDROID_NOTIFICATION, session.transactionId, mapOf(1 to key)))
+    }
+
     internal suspend fun runSession(
         session: RuntimeSession,
         onReady: (String) -> Unit,
         onPing: () -> Unit,
         onRing: () -> Unit,
         onClipboardSync: suspend (Message) -> Unit,
+        onNotificationSync: suspend (Message) -> Unit,
+        onNotificationClear: suspend (Message) -> Unit,
+        onNotificationAction: suspend (Message) -> Unit,
+        onAndroidNotificationDismiss: suspend (Message) -> Unit,
     ) {
         while (!session.socket.isClosed) {
             Log.d("Quava", "Waiting for session message...")
@@ -330,6 +355,52 @@ class PairingProtocol(private val appContext: Context) {
                         ),
                     )
                 }
+
+                NOTIFICATION -> {
+                    Log.d("Quava", "Received Notification Sync")
+
+                    Log.d("Quava", "Notification payload: ${message.payload}")
+
+                    onNotificationSync(message)
+
+                    writeMessage(
+                        session.output,
+                        Message(
+                            NOTIFICATION_ACK,
+                            message.transactionId,
+                            emptyMap(),
+                        )
+                    )
+                }
+
+                CLEAR_NOTIFICATION -> {
+                    Log.d("Quava", "Received Notification Clear")
+
+                    onNotificationClear(message)
+
+                    writeMessage(
+                        session.output,
+                        Message(
+                            CLEAR_NOTIFICATION_ACK,
+                            message.transactionId,
+                            emptyMap(),
+                        )
+                    )
+                }
+
+                // Android sends this request without blocking the session
+                // reader. The Linux acknowledgement is therefore consumed
+                // here; it is not an unsolicited request.
+                CLEAR_NOTIFICATION_ACK -> {
+                    Log.d("Quava", "Received Notification Clear ACK")
+                }
+
+                // Android notification forwarding is fire-and-forget so the
+                // listener never blocks the main notification pipeline.
+                NOTIFICATION_ACK -> Log.d("Quava", "Received Notification Sync ACK")
+
+                NOTIFICATION_ACTION -> { onNotificationAction(message); writeMessage(session.output, Message(NOTIFICATION_ACTION_ACK, message.transactionId, emptyMap())) }
+                DISMISS_ANDROID_NOTIFICATION -> { onAndroidNotificationDismiss(message); writeMessage(session.output, Message(DISMISS_ANDROID_NOTIFICATION_ACK, message.transactionId, emptyMap())) }
 
                 else -> {
                     error("unexpected session message ${message.type}")
@@ -423,34 +494,57 @@ class PairingProtocol(private val appContext: Context) {
         return Message(type, transactionId, payload, version)
     }
 
+    @Synchronized
     private fun writeMessage(output: DataOutputStream, message: Message) {
-        val payload = CBORObject.NewMap()
-        message.payload.forEach { (key, value) ->
-            payload[CBORObject.FromObject(key)] = CBORObject.FromObject(value)
+        synchronized(writeLock) {
+            val payload = CBORObject.NewMap()
+            message.payload.forEach { (key, value) ->
+                payload[CBORObject.FromObject(key)] = CBORObject.FromObject(value)
+            }
+            val encoded = CBORObject.NewMap().apply {
+                this[CBORObject.FromObject(0)] = CBORObject.FromObject(PROTOCOL_VERSION)
+                this[CBORObject.FromObject(1)] = CBORObject.FromObject(message.type)
+                this[CBORObject.FromObject(2)] = CBORObject.FromObject(message.transactionId)
+                this[CBORObject.FromObject(3)] = payload
+            }.EncodeToBytes()
+            require(encoded.size <= MAX_FRAME_BYTES) { "response frame is too large" }
+            output.writeInt(encoded.size)
+            output.write(encoded)
+            output.flush()
         }
-        val encoded = CBORObject.NewMap().apply {
-            this[CBORObject.FromObject(0)] = CBORObject.FromObject(PROTOCOL_VERSION)
-            this[CBORObject.FromObject(1)] = CBORObject.FromObject(message.type)
-            this[CBORObject.FromObject(2)] = CBORObject.FromObject(message.transactionId)
-            this[CBORObject.FromObject(3)] = payload
-        }.EncodeToBytes()
-        require(encoded.size <= MAX_FRAME_BYTES) { "response frame is too large" }
-        output.writeInt(encoded.size)
-        output.write(encoded)
-        output.flush()
     }
+
 
     private fun CBORObject.toValue(): Any? = when (type) {
         CBORType.ByteString -> GetByteString()
         CBORType.TextString -> AsString()
         CBORType.Boolean -> AsBoolean()
-        CBORType.Array -> values.map { it.AsInt64Value() }
+
+        CBORType.Array -> values.map { it.toValue() }
         // Go's append([]uint64(nil), empty...) produces a nil slice, which
         // fxamacker/cbor correctly encodes as CBOR null. Capabilities are
         // informational, but the null still has to be decoded safely.
-        CBORType.SimpleValue -> if (isNull) null else error("unsupported CBOR simple value")
+
+        CBORType.Map -> keys.associate { key ->
+            key.toValue() to this[key].toValue()
+        }
+
+        CBORType.SimpleValue ->
+            if (isNull) null else error("unsupported CBOR simple value")
+
+        CBORType.FloatingPoint -> AsDouble()
+
         else -> AsInt64Value()
     }
+
+    // private fun CBORObject.toValue(): Any? = when (type) {
+    //     CBORType.ByteString -> GetByteString()
+    //     CBORType.TextString -> AsString()
+    //     CBORType.Boolean -> AsBoolean()
+    //     CBORType.Array -> values.map { it.AsInt64Value() }
+    //     CBORType.SimpleValue -> if (isNull) null else error("unsupported CBOR simple value")
+    //     else -> AsInt64Value()
+    // }
 
     private fun Message.bytes(key: Int, size: Int): ByteArray = (payload[key] as? ByteArray)?.also {
         require(it.size == size) { "field $key must be $size bytes" }
@@ -576,6 +670,14 @@ class PairingProtocol(private val appContext: Context) {
         private const val RING_ACK = 0x23L
         private const val CLIPBOARD = 0x24L
         private const val CLIPBOARD_ACK = 0x25L
+        private const val NOTIFICATION = 0x26L
+        private const val NOTIFICATION_ACK = 0x27L
+        private const val CLEAR_NOTIFICATION = 0x28L
+        private const val CLEAR_NOTIFICATION_ACK = 0x29L
+        private const val NOTIFICATION_ACTION = 0x2aL
+        private const val NOTIFICATION_ACTION_ACK = 0x2bL
+        private const val DISMISS_ANDROID_NOTIFICATION = 0x2cL
+        private const val DISMISS_ANDROID_NOTIFICATION_ACK = 0x2dL
         private const val PING_SILENT = 0
         private const val MAX_FRAME_BYTES = 64 * 1024
         private const val PAIRING_TIMEOUT_MS = 120_000

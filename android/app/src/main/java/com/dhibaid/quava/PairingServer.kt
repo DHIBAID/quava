@@ -39,6 +39,7 @@ class PairingServer(
     private var serverSocket: ServerSocket? = null
     private var activePairing: PairingProtocol.Session? = null
     private var activeSocket: Socket? = null
+    private var activeSession: PairingProtocol.RuntimeSession? = null
     private val lock = Any()
 
     fun start(port: Int): Boolean = try {
@@ -95,7 +96,7 @@ class PairingServer(
         } catch (e: PairingProtocol.BusyException) {
             socket.closeQuietly()
         } catch (e: Exception) {
-            Log.w(TAG, "connection failed: ${e.message}")
+            Log.e(TAG, "connection failed", e)
 
             update {
                 it.copy(
@@ -161,33 +162,78 @@ class PairingServer(
             )
         }
 
-        protocol.runSession(
-            session = session,
-            onReady = { hostName ->
-                peerName = hostName
+        synchronized(lock) { activeSession = session }
 
-                Log.d(
-                    "QuavaSession",
-                    "Session established with Linux host: $hostName"
-                )
+        try {
+            protocol.runSession(
+                session = session,
+                onReady = { hostName ->
+                    peerName = hostName
 
-                update {
-                    it.copy(
-                        connected = true,
-                        hostName = hostName,
-                        status = "Connected to $hostName",
+                    Log.d(
+                        "QuavaSession",
+                        "Session established with Linux host: $hostName"
                     )
-                }
 
-                quavaService?.onConnected(hostName)
-            },
-            onPing = { quavaService?.onPing(peerName) },
-            onRing = { quavaService?.onRing(peerName) },
-            onClipboardSync = { message ->
-                quavaService?.onClipboardSync(message)
-            })
+                    update {
+                        it.copy(
+                            connected = true,
+                            hostName = hostName,
+                            status = "Connected to: $hostName.",
+                        )
+                    }
+
+                    quavaService?.onConnected(hostName)
+                },
+                onPing = { quavaService?.onPing(peerName) },
+
+                onRing = { quavaService?.onRing(peerName) },
+
+                onClipboardSync = { message ->
+                    quavaService?.onClipboardSync(message)
+                },
+
+                onNotificationSync = { message ->
+                    quavaService?.onNotificationSync(message)
+                },
+
+                onNotificationClear = { message ->
+                    quavaService?.onNotificationClear(message)
+                },
+                onNotificationAction = { message -> quavaService?.onAndroidNotificationAction(message) },
+                onAndroidNotificationDismiss = { message -> quavaService?.onAndroidNotificationDismiss(message) }
+            )
+        } finally {
+            // A replacement connection may already be active when an older
+            // session finishes. Do not let the old cleanup erase it.
+            synchronized(lock) {
+                if (activeSession === session) activeSession = null
+            }
+        }
 
     }
+
+    fun sendNotificationClear(id: Int) {
+        val session = synchronized(lock) { activeSession }
+        if (session == null) {
+            Log.w(TAG, "cannot clear remote notification $id: no active session")
+            return
+        }
+        try {
+            protocol.sendNotificationClear(session, id)
+            Log.i(TAG, "sent remote notification clear for $id")
+        } catch (e: Exception) {
+            Log.e(TAG, "failed to clear remote notification $id", e)
+        }
+    }
+
+    fun sendAndroidNotification(notification: NotificationTransport.NotificationData) {
+        val session = synchronized(lock) { activeSession }
+        if (session == null) Log.w(TAG, "cannot forward notification: no active session")
+        else try { protocol.sendAndroidNotification(session, notification); Log.d(TAG, "forwarded notification ${notification.key}") }
+        catch (e: Exception) { Log.e(TAG, "failed to forward notification", e) }
+    }
+    fun sendAndroidNotificationDismiss(key: String) { synchronized(lock) { activeSession }?.let { protocol.sendAndroidNotificationDismiss(it, key) } }
 
     fun confirmPairing() {
         synchronized(lock) { activePairing }?.confirm(true)

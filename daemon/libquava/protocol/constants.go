@@ -29,6 +29,17 @@ const (
 	MessageTypeSyncClipboard    = 0x24
 	MessageTypeSyncClipboardAck = 0x25
 
+	MessageTypeSyncNotification     = 0x26
+	MessageTypeSyncNotificationAck  = 0x27
+	MessageTypeClearNotification    = 0x28
+	MessageTypeClearNotificationAck = 0x29
+	// Android-originated notification controls. These use Android's stable
+	// StatusBarNotification key rather than the D-Bus numeric ID.
+	MessageTypeNotificationAction            = 0x2a
+	MessageTypeNotificationActionAck         = 0x2b
+	MessageTypeDismissAndroidNotification    = 0x2c
+	MessageTypeDismissAndroidNotificationAck = 0x2d
+
 	// PingPayloadSilent marks a heartbeat Ping that should not generate a
 	// user-visible notification on the receiving device.
 	PingPayloadSilent = 0

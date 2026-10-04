@@ -13,6 +13,7 @@ func init() {
 		commands.Pair,
 		commands.Ring,
 		commands.Clipboard,
+		commands.Notification,
 	)
 }
 

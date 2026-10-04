@@ -24,6 +24,7 @@ import (
 	"libquava/config"
 	"libquava/discovery"
 	lq "libquava/models"
+	"libquava/notifications"
 
 	"libquava/pairing"
 	"libquava/protocol"
@@ -31,11 +32,13 @@ import (
 )
 
 type Daemon struct {
-	store     *config.Store
-	listener  net.Listener
-	mu        sync.Mutex
-	sessions  map[string]*models.ManagedSession
-	clipboard *clipboard.ClipboardService
+	store                *config.Store
+	listener             net.Listener
+	mu                   sync.Mutex
+	sessions             map[string]*models.ManagedSession
+	clipboard            *clipboard.ClipboardService
+	dbusNotifications    *notifications.DBusNotificationService
+	androidNotifications *notifications.AndroidNotificationBridge
 }
 
 func main() {
@@ -72,15 +75,34 @@ func main() {
 		sessions: map[string]*models.ManagedSession{},
 	}
 
+	// Init clipboard service
 	d.clipboard = clipboard.NewClipboardService(d.pushClipboardContent)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	clipboardCtx, clipboardCancel := context.WithCancel(context.Background())
+	defer clipboardCancel()
 
-	if err := d.clipboard.StartClipboardService(ctx); err != nil {
+	if err := d.clipboard.StartClipboardService(clipboardCtx); err != nil {
 		log.Printf("clipboard: failed to start: %v", err)
 	}
 	defer d.clipboard.StopClipboardService()
+
+	// Init notifications service
+	d.dbusNotifications = notifications.NewDBusNotificationWatcher(d.pushNotificationContent, d.clearNotificationContent)
+	d.androidNotifications, err = notifications.NewAndroidNotificationBridge(d.sendAndroidNotificationAction, d.dismissAndroidNotification)
+	if err != nil {
+		log.Printf("notifications: Android notification bridge failed: %v", err)
+	}
+	if d.androidNotifications != nil {
+		defer d.androidNotifications.Close()
+	}
+
+	notifCtx, notifCancel := context.WithCancel(context.Background())
+	defer notifCancel()
+
+	if err := d.dbusNotifications.StartNotificationService(notifCtx); err != nil {
+		log.Printf("notificaions: failed to start: %v", err)
+	}
+	defer d.dbusNotifications.StopNotificationService()
 
 	defer func() {
 		_ = listener.Close()
@@ -99,10 +121,7 @@ func main() {
 	}
 }
 
-func (d *Daemon) pushClipboardContent(
-	ctx context.Context,
-	content lq.ClipboardContent,
-) error {
+func (d *Daemon) pushClipboardContent(ctx context.Context, content lq.ClipboardContent) error {
 	d.mu.Lock()
 
 	activeSessions := make([]*session.Session, 0, len(d.sessions))
@@ -119,6 +138,54 @@ func (d *Daemon) pushClipboardContent(
 
 	for _, active := range activeSessions {
 		if err := active.SyncClipboard(ctx, content); err != nil {
+			errs = append(errs, err)
+		}
+	}
+
+	return errors.Join(errs...)
+}
+
+func (d *Daemon) pushNotificationContent(ctx context.Context, content lq.NotificationContent) error {
+	d.mu.Lock()
+
+	activeSessions := make([]*session.Session, 0, len(d.sessions))
+
+	for deviceID, managed := range d.sessions {
+		if managed.Active != nil && notificationSyncsToClient(d.store.NotificationSync(deviceID)) {
+			activeSessions = append(activeSessions, managed.Active)
+		}
+	}
+
+	d.mu.Unlock()
+
+	var errs []error
+
+	for _, active := range activeSessions {
+		if err := active.SyncNotifications(ctx, content); err != nil {
+			errs = append(errs, err)
+		}
+	}
+
+	return errors.Join(errs...)
+}
+
+func (d *Daemon) clearNotificationContent(ctx context.Context, id uint32) error {
+	d.mu.Lock()
+
+	activeSessions := make([]*session.Session, 0, len(d.sessions))
+
+	for deviceID, managed := range d.sessions {
+		if managed.Active != nil && notificationSyncsToClient(d.store.NotificationSync(deviceID)) {
+			activeSessions = append(activeSessions, managed.Active)
+		}
+	}
+
+	d.mu.Unlock()
+
+	var errs []error
+
+	for _, active := range activeSessions {
+		if err := active.ClearNotification(ctx, id); err != nil {
 			errs = append(errs, err)
 		}
 	}
@@ -199,6 +266,18 @@ func (d *Daemon) handle(connection net.Conn) {
 
 	case "clipboard-service-stop":
 		d.clipboardServiceStop(req, encoder)
+
+	case "notif-sync-both":
+		d.setNotificationSync(req, encoder, config.NotificationSyncBoth)
+
+	case "notif-sync-stop":
+		d.setNotificationSync(req, encoder, config.NotificationSyncNone)
+
+	case "notif-sync-toclient":
+		d.setNotificationSync(req, encoder, config.NotificationSyncToClient)
+
+	case "notif-sync-tohost":
+		d.setNotificationSync(req, encoder, config.NotificationSyncToHost)
 
 	default:
 		_ = encoder.Encode(models.Response{Error: fmt.Sprintf("unsupported daemon command %q", req.Command)})
@@ -353,6 +432,12 @@ func (d *Daemon) runSession(ctx context.Context, identity lq.IdentityFile, peer 
 
 		return connection.ProtocolConn(), nil
 	}, func(active *session.Session) {
+		active.SetAndroidNotificationHandler(func(ctx context.Context, notification lq.AndroidNotificationContent) error {
+			if d.androidNotifications == nil || !d.notificationSyncsToHost(peer.PeerDeviceID) {
+				return nil
+			}
+			return d.androidNotifications.Show(ctx, notification)
+		})
 		d.mu.Lock()
 		if managed := d.sessions[peer.PeerDeviceID]; managed != nil {
 			managed.Active = active
@@ -369,6 +454,34 @@ func (d *Daemon) runSession(ctx context.Context, identity lq.IdentityFile, peer 
 	})
 
 	d.clearSession(peer.PeerDeviceID)
+}
+
+func (d *Daemon) sendAndroidNotificationAction(ctx context.Context, key string, action int, reply string) error {
+	return d.withActiveSession(func(active *session.Session) error {
+		return active.SendAndroidNotificationAction(ctx, key, action, reply)
+	})
+}
+
+func (d *Daemon) dismissAndroidNotification(ctx context.Context, key string) error {
+	return d.withActiveSession(func(active *session.Session) error { return active.DismissAndroidNotification(ctx, key) })
+}
+
+func (d *Daemon) withActiveSession(fn func(*session.Session) error) error {
+	d.mu.Lock()
+	active := make([]*session.Session, 0, len(d.sessions))
+	for _, managed := range d.sessions {
+		if managed.Active != nil {
+			active = append(active, managed.Active)
+		}
+	}
+	d.mu.Unlock()
+	var errs []error
+	for _, s := range active {
+		if err := fn(s); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
 }
 
 func (d *Daemon) clearSession(id string) {
@@ -498,4 +611,38 @@ func (d *Daemon) clipboardServiceStop(_ models.Request, enc *json.Encoder) {
 
 	d.clipboard.StopClipboardService()
 	_ = enc.Encode(models.Response{})
+}
+
+func (d *Daemon) setNotificationSync(req models.Request, enc *json.Encoder, direction config.NotificationSyncDirection) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	if _, paired := d.store.Device(req.PeerDeviceID); !paired {
+		_ = enc.Encode(models.Response{Error: "peer device is not paired"})
+		return
+	}
+	if err := d.store.SetNotificationSync(req.PeerDeviceID, direction); err != nil {
+		_ = enc.Encode(models.Response{Error: err.Error()})
+		return
+	}
+	if err := d.store.Save(); err != nil {
+		_ = enc.Encode(models.Response{Error: err.Error()})
+		return
+	}
+	_ = enc.Encode(models.Response{})
+}
+
+func (d *Daemon) notificationSyncsToHost(deviceID string) bool {
+	d.mu.Lock()
+	direction := d.store.NotificationSync(deviceID)
+	d.mu.Unlock()
+	return notificationSyncsToHost(direction)
+}
+
+func notificationSyncsToClient(direction config.NotificationSyncDirection) bool {
+	return direction == config.NotificationSyncBoth || direction == config.NotificationSyncToClient
+}
+
+func notificationSyncsToHost(direction config.NotificationSyncDirection) bool {
+	return direction == config.NotificationSyncBoth || direction == config.NotificationSyncToHost
 }

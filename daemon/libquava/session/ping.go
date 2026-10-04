@@ -13,19 +13,12 @@ func (s *Session) SendPing(ctx context.Context) error {
 	if s == nil || s.conn == nil {
 		return errors.New("session: closed")
 	}
-	s.pingMutex.Lock()
-	defer s.pingMutex.Unlock()
-
 	transactionID, err := crypto.GenerateTransactionID()
 	if err != nil {
 		return err
 	}
 
-	if err := s.conn.WriteMessage(ctx, protocol.NewMessage(protocol.MessageTypePing, transactionID, nil)); err != nil {
-		return err
-	}
-
-	response, err := s.conn.ReadMessage(ctx)
+	response, err := s.sendRequest(ctx, protocol.NewMessage(protocol.MessageTypePing, transactionID, nil))
 	if err != nil {
 		return err
 	}

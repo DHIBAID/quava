@@ -56,6 +56,7 @@ import com.dhibaid.quava.PairingServer
 @Composable
 fun HomeScreen(
     server: PairingServer,
+    onEnableNotificationAccess: () -> Unit = {},
     onSettingsClick: () -> Unit = {},
     onUnpairClick: () -> Unit = {},
     onAboutClick: () -> Unit = {},
@@ -148,6 +149,13 @@ fun HomeScreen(
                     else -> {
                         WaitingCard()
                     }
+                }
+
+                OutlinedButton(
+                    onClick = onEnableNotificationAccess,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text("Enable notification forwarding")
                 }
 
                 Spacer(Modifier.weight(1f))
