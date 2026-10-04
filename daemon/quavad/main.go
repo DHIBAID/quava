@@ -18,6 +18,8 @@ import (
 	"sync"
 	"time"
 
+	clip "golang.design/x/clipboard"
+
 	"libquava/clipboard"
 	"libquava/config"
 	"libquava/discovery"
@@ -188,6 +190,15 @@ func (d *Daemon) handle(connection net.Conn) {
 
 	case "ring":
 		d.ring(req, encoder)
+
+	case "clipboard-push":
+		d.clipboardPush(req, encoder)
+
+	case "clipboard-service-start":
+		d.clipboardServiceStart(req, encoder)
+
+	case "clipboard-service-stop":
+		d.clipboardServiceStop(req, encoder)
 
 	default:
 		_ = encoder.Encode(models.Response{Error: fmt.Sprintf("unsupported daemon command %q", req.Command)})
@@ -419,5 +430,72 @@ func (d *Daemon) ring(req models.Request, enc *json.Encoder) {
 		return
 	}
 
+	_ = enc.Encode(models.Response{})
+}
+
+func (d *Daemon) clipboardPush(req models.Request, enc *json.Encoder) {
+	d.mu.Lock()
+
+	managed := d.sessions[req.PeerDeviceID]
+	var active *session.Session
+
+	if managed != nil {
+		active = managed.Active
+	}
+
+	d.mu.Unlock()
+
+	if active == nil {
+		_ = enc.Encode(models.Response{Error: "no active session; use connect first"})
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), utils.Duration(req.TimeoutMS, 15*time.Second))
+	defer cancel()
+
+	content, err := clip.Read(ctx, clip.FmtText)
+	if err != nil {
+		enc.Encode(models.Response{Error: "failed to read clipboard content"})
+		return
+	}
+
+	clipboardContent := lq.ClipboardContent{
+		ContentType: "text", // to support others later
+		Content:     content,
+	}
+
+	err = d.clipboard.PushClipboardContent(ctx, clipboardContent)
+	if err != nil {
+		_ = enc.Encode(models.Response{Error: err.Error()})
+		return
+	}
+
+	_ = enc.Encode(models.Response{})
+
+}
+
+func (d *Daemon) clipboardServiceStart(_ models.Request, enc *json.Encoder) {
+	if d.clipboard == nil {
+		d.clipboard = clipboard.NewClipboardService(d.pushClipboardContent)
+	}
+
+	if err := d.clipboard.StartClipboardService(context.Background()); err != nil {
+		if err.Error() != "clipboard: service already running" {
+			log.Printf("clipboard: failed to start: %v", err)
+			_ = enc.Encode(models.Response{Error: err.Error()})
+			return
+		}
+	}
+
+	_ = enc.Encode(models.Response{})
+}
+
+func (d *Daemon) clipboardServiceStop(_ models.Request, enc *json.Encoder) {
+	if d.clipboard == nil {
+		_ = enc.Encode(models.Response{})
+		return
+	}
+
+	d.clipboard.StopClipboardService()
 	_ = enc.Encode(models.Response{})
 }
