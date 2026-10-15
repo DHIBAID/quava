@@ -17,13 +17,14 @@ type Request struct {
 }
 
 type Response struct {
-	Error      string              `json:"error,omitempty"`
-	Event      string              `json:"event,omitempty"`
-	Device     *models.PairResult  `json:"device,omitempty"`
-	Devices    []models.PairResult `json:"devices,omitempty"`
-	Discovered []discovery.Device  `json:"discovered,omitempty"`
-	Code       uint32              `json:"code,omitempty"`
-	PeerName   string              `json:"peer_name,omitempty"`
+	Error              string              `json:"error,omitempty"`
+	Event              string              `json:"event,omitempty"`
+	Device             *models.PairResult  `json:"device,omitempty"`
+	Devices            []models.PairResult `json:"devices,omitempty"`
+	ConnectedDeviceIDs []string            `json:"connected_device_ids,omitempty"`
+	Discovered         []discovery.Device  `json:"discovered,omitempty"`
+	Code               uint32              `json:"code,omitempty"`
+	PeerName           string              `json:"peer_name,omitempty"`
 }
 
 type ManagedSession struct {

@@ -7,6 +7,7 @@ import (
 func init() {
 	commands.Root.AddCommand(
 		commands.Connect,
+		commands.Disconnect,
 		commands.Discover,
 		commands.Ping,
 		commands.Devices,

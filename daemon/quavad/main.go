@@ -252,6 +252,9 @@ func (d *Daemon) handle(connection net.Conn) {
 	case "connect":
 		d.connect(req, encoder)
 
+	case "disconnect":
+		d.disconnect(req, encoder)
+
 	case "ping":
 		d.ping(req, encoder)
 
@@ -288,8 +291,15 @@ func (d *Daemon) devices(req models.Request, enc *json.Encoder) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
+	connected := make([]string, 0, len(d.sessions))
+	for deviceID, managed := range d.sessions {
+		if managed.Active != nil {
+			connected = append(connected, deviceID)
+		}
+	}
+
 	if req.PeerDeviceID == "" {
-		_ = enc.Encode(models.Response{Devices: d.store.Devices()})
+		_ = enc.Encode(models.Response{Devices: d.store.Devices(), ConnectedDeviceIDs: connected})
 		return
 	}
 
@@ -409,6 +419,25 @@ func (d *Daemon) connect(req models.Request, enc *json.Encoder) {
 	_ = enc.Encode(models.Response{})
 }
 
+// disconnect cancels the managed session for one peer. runSession performs the
+// remaining cleanup and removes the entry once the protocol connection closes.
+func (d *Daemon) disconnect(req models.Request, enc *json.Encoder) {
+	d.mu.Lock()
+	managed := d.sessions[req.PeerDeviceID]
+	if managed == nil {
+		d.mu.Unlock()
+		_ = enc.Encode(models.Response{Error: "peer device is not connected"})
+		return
+	}
+	cancel := managed.Cancel
+	d.mu.Unlock()
+
+	if cancel != nil {
+		cancel()
+	}
+	_ = enc.Encode(models.Response{})
+}
+
 func (d *Daemon) runSession(ctx context.Context, identity lq.IdentityFile, peer lq.PairResult) {
 	client, err := discovery.NewClient()
 
@@ -419,7 +448,7 @@ func (d *Daemon) runSession(ctx context.Context, identity lq.IdentityFile, peer 
 
 	defer func() { _ = client.Close() }()
 
-	_ = session.Run(ctx, identity, peer, func(dialCtx context.Context) (*protocol.Conn, error) {
+	if err := session.Run(ctx, identity, peer, func(dialCtx context.Context) (*protocol.Conn, error) {
 		device, err := client.Find(dialCtx, peer.PeerDeviceID)
 		if err != nil {
 			return nil, err
@@ -451,7 +480,9 @@ func (d *Daemon) runSession(ctx context.Context, identity lq.IdentityFile, peer 
 		}
 
 		d.mu.Unlock()
-	})
+	}); err != nil && !errors.Is(err, context.Canceled) {
+		log.Printf("session: %s ended: %v", peer.PeerDeviceID, err)
+	}
 
 	d.clearSession(peer.PeerDeviceID)
 }

@@ -84,8 +84,10 @@ class QuavaService : Service() {
         mdns = MdnsAdvertiser(this)
         ringController = RingController(this)
         hostNotificationManager = HostNotificationManager(this)
-        NotificationTransport.sender = { notification -> scope.launch(Dispatchers.IO) { server.sendAndroidNotification(notification) } }
-        NotificationTransport.dismissSender = { key -> scope.launch(Dispatchers.IO) { server.sendAndroidNotificationDismiss(key) } }
+        NotificationTransport.sender =
+            { notification -> scope.launch(Dispatchers.IO) { server.sendAndroidNotification(notification) } }
+        NotificationTransport.dismissSender =
+            { key -> scope.launch(Dispatchers.IO) { server.sendAndroidNotificationDismiss(key) } }
         NotificationForwarder.forwardActive()
 
 
@@ -126,7 +128,7 @@ class QuavaService : Service() {
     }
 
     fun onConnected(peerName: String) {
-        val notif = foregroundNotification("Connected to $peerName")
+        val notif = foregroundNotification("Connected to: $peerName.")
         val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         nm.notify(FOREGROUND_NOTIFICATION_ID, notif)
     }

@@ -50,7 +50,12 @@ class HostNotificationManager(
         } else {
             Notification.Builder(context)
         }
-            .setSmallIcon(hostIcon?.let(Icon::createWithBitmap) ?: Icon.createWithResource(context, android.R.drawable.ic_dialog_info))
+            .setSmallIcon(
+                hostIcon?.let(Icon::createWithBitmap) ?: Icon.createWithResource(
+                    context,
+                    android.R.drawable.ic_dialog_info
+                )
+            )
             .setContentTitle(notification.title)
             .setContentText(notification.body)
             .setSubText(notification.appName)
