@@ -51,6 +51,7 @@ class MainActivity : ComponentActivity() {
         bindService(serviceIntent, conn, BIND_AUTO_CREATE)
 
         setContent {
+            var settingsOpen by remember { mutableStateOf(false) }
             val launcher = rememberLauncherForActivityResult(
                 ActivityResultContracts.RequestPermission()
             ) { granted ->
@@ -72,8 +73,13 @@ class MainActivity : ComponentActivity() {
             }
 
             service?.let {
-                HomeScreen(
+                if (settingsOpen) {
+                    com.dhibaid.quava.ui.NotificationSettingsScreen(
+                        onBack = { settingsOpen = false }
+                    )
+                } else HomeScreen(
                     server = it.server,
+                    onSettingsClick = { settingsOpen = true },
                     onEnableNotificationAccess = {
                         startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))
                     },

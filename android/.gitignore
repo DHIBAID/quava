@@ -3,6 +3,7 @@
 build/
 !gradle/wrapper/gradle-wrapper.jar
 !**/src/**/build/
+.device
 
 # Local machine config (contains your SDK path)
 local.properties

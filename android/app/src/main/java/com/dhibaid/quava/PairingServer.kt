@@ -230,10 +230,19 @@ class PairingServer(
     fun sendAndroidNotification(notification: NotificationTransport.NotificationData) {
         val session = synchronized(lock) { activeSession }
         if (session == null) Log.w(TAG, "cannot forward notification: no active session")
-        else try { protocol.sendAndroidNotification(session, notification); Log.d(TAG, "forwarded notification ${notification.key}") }
-        catch (e: Exception) { Log.e(TAG, "failed to forward notification", e) }
+        else try {
+            protocol.sendAndroidNotification(session, notification); Log.d(
+                TAG,
+                "forwarded notification ${notification.key}"
+            )
+        } catch (e: Exception) {
+            Log.e(TAG, "failed to forward notification", e)
+        }
     }
-    fun sendAndroidNotificationDismiss(key: String) { synchronized(lock) { activeSession }?.let { protocol.sendAndroidNotificationDismiss(it, key) } }
+
+    fun sendAndroidNotificationDismiss(key: String) {
+        synchronized(lock) { activeSession }?.let { protocol.sendAndroidNotificationDismiss(it, key) }
+    }
 
     fun confirmPairing() {
         synchronized(lock) { activePairing }?.confirm(true)
