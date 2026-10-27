@@ -13,6 +13,7 @@ var Ring = &cobra.Command{
 	Short: "Ring a device on the network.",
 	Long:  `Ring a device on the network using its peer device ID.`,
 
+	Args: cobra.ExactArgs(1),
 	RunE: func(command *cobra.Command, args []string) error {
 		return ring(args)
 	},

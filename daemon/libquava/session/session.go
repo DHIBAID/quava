@@ -37,6 +37,12 @@ type Session struct {
 	readDone            chan error
 	closeNotification   func(uint32) error
 	androidNotification func(context.Context, models.AndroidNotificationContent) error
+	remoteInput         func(context.Context, models.RemoteInput) error
+	clipboardHandler    func(context.Context, models.ClipboardContent) error
+	inputQueue          chan inputJob
+	eventQueue          chan inputJob
+	inputTokens         float64
+	inputLast           time.Time
 }
 
 func Connect(ctx context.Context, conn *protocol.Conn, identity models.IdentityFile, peer models.PairResult) (*Session, error) {
@@ -247,6 +253,12 @@ func NewServerSession(ctx context.Context, conn *protocol.Conn, identity models.
 // Run maintains a session to a trusted peer. It reconnects after transport loss
 // with bounded exponential backoff. Pairing trust is never modified by reconnects.
 func Run(ctx context.Context, identity models.IdentityFile, peer models.PairResult, dial func(context.Context) (*protocol.Conn, error), onConnect func(*Session), onDisconnect func(error)) error {
+	return RunWithCallbacks(ctx, identity, peer, dial, nil, onConnect, onDisconnect)
+}
+
+// RunWithCallbacks allows callers to install message handlers before the
+// dispatcher starts, then publish the session only after the dispatcher is live.
+func RunWithCallbacks(ctx context.Context, identity models.IdentityFile, peer models.PairResult, dial func(context.Context) (*protocol.Conn, error), onPrepare func(*Session), onConnect func(*Session), onDisconnect func(error)) error {
 	if dial == nil {
 		return errors.New("session: nil dial function")
 	}
@@ -297,11 +309,21 @@ func Run(ctx context.Context, identity models.IdentityFile, peer models.PairResu
 			continue
 		}
 		backoff = time.Second
-		s.startDispatcher(ctx)
+		// Each transport connection gets its own context. A dropped connection
+		// must stop its reader and input worker even while Run retries discovery.
+		sessionCtx, sessionCancel := context.WithCancel(ctx)
+		// Install handlers before the reader can dispatch unsolicited messages.
+		if onPrepare != nil {
+			onPrepare(s)
+		}
+		s.startDispatcher(sessionCtx)
+		// Publish only after the request dispatcher is ready, so IPC requests
+		// cannot race the reader startup.
 		if onConnect != nil {
 			onConnect(s)
 		}
-		err = s.RunHeartbeat(ctx)
+		err = s.RunHeartbeat(sessionCtx)
+		sessionCancel()
 		_ = s.Close()
 		if ctx.Err() != nil {
 			return ctx.Err()
@@ -350,9 +372,18 @@ func (s *Session) sendHeartbeat(ctx context.Context) error {
 	return protocol.ValidatePong(response, transactionID)
 }
 
+type inputJob struct {
+	ctx context.Context
+	msg protocol.Message
+}
+
 func (s *Session) startDispatcher(ctx context.Context) {
 	s.readerOnce.Do(func() {
 		s.readDone = make(chan error, 1)
+		s.inputQueue = make(chan inputJob, 128)
+		s.eventQueue = make(chan inputJob, 64)
+		go s.runInputWorker(ctx)
+		go s.runEventWorker(ctx)
 		go func() {
 			for {
 				msg, err := s.conn.ReadMessage(ctx)
@@ -360,12 +391,61 @@ func (s *Session) startDispatcher(ctx context.Context) {
 					s.readDone <- err
 					return
 				}
-				if !s.deliverResponse(msg) {
-					s.handleUnsolicited(ctx, msg)
-				}
+				s.dispatchIncoming(ctx, msg)
 			}
 		}()
 	})
+}
+
+func (s *Session) dispatchIncoming(ctx context.Context, msg protocol.Message) {
+	if s.deliverResponse(msg) {
+		return
+	}
+	job := inputJob{ctx: ctx, msg: msg}
+	if msg.Type == protocol.MessageTypeInputEvent {
+		if !s.allowInputEvent(time.Now()) {
+			_ = s.ackInput(ctx, msg, false)
+			return
+		}
+		select {
+		case s.inputQueue <- job:
+		default:
+			log.Printf("session: input queue full; dropping input event")
+			_ = s.ackInput(ctx, msg, false)
+		}
+		return
+	}
+	select {
+	case s.eventQueue <- job:
+	default:
+		log.Printf("session: unsolicited event queue full; dropping message type %d", msg.Type)
+		var ackType uint64
+		switch msg.Type {
+		case protocol.MessageTypeSyncClipboard:
+			ackType = protocol.MessageTypeSyncClipboardAck
+		case protocol.MessageTypeSyncNotification:
+			ackType = protocol.MessageTypeSyncNotificationAck
+		case protocol.MessageTypeClearNotification:
+			ackType = protocol.MessageTypeClearNotificationAck
+		}
+		if ackType != 0 {
+			ack := protocol.NewMessage(ackType, msg.TransactionID, map[uint64]any{0: false})
+			s.pingMutex.Lock()
+			_ = s.conn.WriteMessage(ctx, ack)
+			s.pingMutex.Unlock()
+		}
+	}
+}
+
+func (s *Session) runEventWorker(ctx context.Context) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case job := <-s.eventQueue:
+			s.handleUnsolicited(job.ctx, job.msg)
+		}
+	}
 }
 
 // sendRequest registers its response channel before writing, so the sole
@@ -432,9 +512,35 @@ func (s *Session) handleUnsolicited(ctx context.Context, msg protocol.Message) {
 		if err := s.handleClearNotification(ctx, msg); err != nil {
 			log.Printf("session: handle clear notification failed: %v", err)
 		}
+	case protocol.MessageTypeSyncClipboard:
+		if err := s.handleIncomingClipboard(ctx, msg); err != nil {
+			log.Printf("session: handle incoming clipboard failed: %v", err)
+		}
 	default:
 		// Ignore other unsolicited messages
 	}
+}
+
+func (s *Session) allowInputEvent(now time.Time) bool {
+	const rate = 500.0 // sustained events per second
+	const burst = 100.0
+	if s.inputLast.IsZero() {
+		s.inputLast = now
+		s.inputTokens = burst
+	}
+	elapsed := now.Sub(s.inputLast).Seconds()
+	if elapsed > 0 {
+		s.inputTokens += elapsed * rate
+	}
+	if s.inputTokens > burst {
+		s.inputTokens = burst
+	}
+	s.inputLast = now
+	if s.inputTokens < 1 {
+		return false
+	}
+	s.inputTokens--
+	return true
 }
 
 // SetAndroidNotificationHandler sets the host-side renderer for notifications

@@ -14,6 +14,7 @@ var Ping = &cobra.Command{
 	Short: "Ping a device on the network.",
 	Long:  `Ping a device on the network using its peer device ID.`,
 
+	Args: cobra.ExactArgs(1),
 	RunE: func(command *cobra.Command, args []string) error {
 		return ping(args)
 	},

@@ -13,6 +13,7 @@ var Clipboard = &cobra.Command{
 	Short: "Send the host's clipboard content to the client.",
 	Long:  `Send the host's clipboard content to the client using its peer device ID.`,
 
+	Args: cobra.ExactArgs(2),
 	RunE: func(command *cobra.Command, args []string) error {
 		return clipboard(args)
 	},
@@ -20,7 +21,7 @@ var Clipboard = &cobra.Command{
 
 func clipboard(args []string) error {
 
-	// option has to be oneof: "push", "start", "stop"
+	// options: push, start, stop, sync-on, sync-off
 	option := args[0]
 
 	switch option {
@@ -35,7 +36,7 @@ func clipboard(args []string) error {
 			return fmt.Errorf("error from daemon: %s", res.Error)
 		}
 
-		fmt.Printf("%s sent for %s\n", "clipboard-push", args[0])
+		fmt.Printf("%s sent for %s\n", "clipboard-push", args[1])
 		return nil
 	case "start":
 		var res models.Response
@@ -48,7 +49,20 @@ func clipboard(args []string) error {
 			return fmt.Errorf("error from daemon: %s", res.Error)
 		}
 
-		fmt.Printf("%s sent for %s\n", "clipboard-service-start", args[0])
+		fmt.Printf("%s sent\n", "clipboard-service-start")
+		return nil
+
+	case "sync-on", "sync-off":
+		cmd := "clipboard-sync-on"
+		if option == "sync-off" {
+			cmd = "clipboard-sync-off"
+		}
+		var res models.Response
+		utils.Call(models.Request{Command: cmd, PeerDeviceID: args[1]}, &res)
+		if res.Error != "" {
+			return fmt.Errorf("error from daemon: %s", res.Error)
+		}
+		fmt.Printf("Automatic clipboard sync %s for %s\n", map[string]string{"sync-on": "enabled", "sync-off": "disabled"}[option], args[1])
 		return nil
 
 	case "stop":
@@ -62,9 +76,9 @@ func clipboard(args []string) error {
 			return fmt.Errorf("error from daemon: %s", res.Error)
 		}
 
-		fmt.Printf("%s sent for %s\n", "clipboard-service-stop", args[0])
+		fmt.Printf("%s sent\n", "clipboard-service-stop")
 		return nil
 	}
 
-	return nil
+	return fmt.Errorf("invalid clipboard option %q (use push, start, stop, sync-on, or sync-off)", option)
 }

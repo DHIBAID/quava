@@ -41,6 +41,9 @@ class PairingServer(
     private var activeSocket: Socket? = null
     private var activeSession: PairingProtocol.RuntimeSession? = null
     private val lock = Any()
+    private val remoteInputDispatcher = RemoteInputDispatcher(scope, protocol) {
+        synchronized(lock) { activeSession }
+    }
 
     fun start(port: Int): Boolean = try {
         ServerSocket().also { ss ->
@@ -244,6 +247,10 @@ class PairingServer(
         synchronized(lock) { activeSession }?.let { protocol.sendAndroidNotificationDismiss(it, key) }
     }
 
+    fun sendRemoteInput(input: RemoteInput) {
+        remoteInputDispatcher.send(input)
+    }
+
     fun confirmPairing() {
         synchronized(lock) { activePairing }?.confirm(true)
     }
@@ -264,6 +271,7 @@ class PairingServer(
     }
 
     private inline fun update(block: (PairingState) -> PairingState) = _state.update(block)
+
     private fun java.io.Closeable.closeQuietly() = try {
         close()
     } catch (_: Exception) {

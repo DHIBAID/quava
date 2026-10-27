@@ -278,6 +278,17 @@ class PairingProtocol(private val appContext: Context) {
         writeMessage(session.output, Message(DISMISS_ANDROID_NOTIFICATION, session.transactionId, mapOf(1 to key)))
     }
 
+    // Remote input is asynchronous: the Android UI must never wait for the
+    // host before it can process the next touch event. A fresh transaction ID
+    // keeps its acknowledgement separate from the session handshake and ping
+    // requests.
+    internal fun sendRemoteInput(session: RuntimeSession, input: RemoteInput) {
+        writeMessage(
+            session.output,
+            Message(INPUT_EVENT, randomBytes(TRANSACTION_ID_BYTES), input.toPayload()),
+        )
+    }
+
     internal suspend fun runSession(
         session: RuntimeSession,
         onReady: (String) -> Unit,
@@ -398,6 +409,11 @@ class PairingProtocol(private val appContext: Context) {
                 // Android notification forwarding is fire-and-forget so the
                 // listener never blocks the main notification pipeline.
                 NOTIFICATION_ACK -> Log.d("Quava", "Received Notification Sync ACK")
+
+                INPUT_EVENT_ACK -> {
+                    val accepted = message.payload[0] as? Boolean ?: false
+                    if (!accepted) Log.w("Quava", "Host rejected remote input")
+                }
 
                 NOTIFICATION_ACTION -> { onNotificationAction(message); writeMessage(session.output, Message(NOTIFICATION_ACTION_ACK, message.transactionId, emptyMap())) }
                 DISMISS_ANDROID_NOTIFICATION -> { onAndroidNotificationDismiss(message); writeMessage(session.output, Message(DISMISS_ANDROID_NOTIFICATION_ACK, message.transactionId, emptyMap())) }
@@ -678,6 +694,8 @@ class PairingProtocol(private val appContext: Context) {
         private const val NOTIFICATION_ACTION_ACK = 0x2bL
         private const val DISMISS_ANDROID_NOTIFICATION = 0x2cL
         private const val DISMISS_ANDROID_NOTIFICATION_ACK = 0x2dL
+        private const val INPUT_EVENT = 0x2eL
+        private const val INPUT_EVENT_ACK = 0x2fL
         private const val PING_SILENT = 0
         private const val MAX_FRAME_BYTES = 64 * 1024
         private const val PAIRING_TIMEOUT_MS = 120_000

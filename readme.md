@@ -13,6 +13,7 @@
 2. Make
 3. Systemd
 4. Zenity (gtk)*
+5. `/dev/uinput` access is required. Check makefile for confirguration (requires session refresh)
 
 ### Setup daemon:
 ```sh
@@ -28,6 +29,11 @@ quava <command> [options] [--flags]
 ```sh
 journalctl --user -u quavad.service -f -n 50
 ```
+
+The user systemd unit imports graphical-session variables before startup. If
+remote input reports that no desktop session is available, run
+`systemctl --user import-environment DISPLAY WAYLAND_DISPLAY XAUTHORITY XDG_RUNTIME_DIR XDG_SESSION_TYPE`
+from that desktop session, then restart `quavad.service`.
 
 ## Linux Pre-requisites
 1. GTK4 (devel)

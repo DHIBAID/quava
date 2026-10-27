@@ -144,6 +144,12 @@ func DecodeMessage(payload []byte) (Message, error) {
 		}
 	}
 
+	if _, hasPayload := encoded[3]; !hasPayload {
+		return Message{}, fmt.Errorf("%w: missing payload", ErrInvalidMessage)
+	}
+	if message.Version == 0 || message.Type == 0 || len(message.TransactionID) == 0 || len(message.TransactionID) > 64 || message.Payload == nil {
+		return Message{}, fmt.Errorf("%w: missing or invalid envelope field", ErrInvalidMessage)
+	}
 	return message, nil
 }
 

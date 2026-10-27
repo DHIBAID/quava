@@ -4,10 +4,12 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"libquava/crypto"
 	"libquava/models"
 	"libquava/protocol"
 	"log"
+	"unicode/utf8"
 )
 
 func (s *Session) handleAndroidNotification(ctx context.Context, msg protocol.Message) error {
@@ -38,16 +40,15 @@ func (s *Session) handleAndroidNotification(ctx context.Context, msg protocol.Me
 		}
 	}
 	log.Printf("session: received Android notification key=%q app=%q actions=%d icon_bytes=%d", key, appName, len(content.Actions), len(icon))
+	var callbackErr error
 	if s.androidNotification != nil {
-		if err := s.androidNotification(ctx, content); err != nil {
-			return err
-		}
+		callbackErr = s.androidNotification(ctx, content)
 	}
-	ack := protocol.NewMessage(protocol.MessageTypeSyncNotificationAck, msg.TransactionID, map[uint64]any{})
+	ack := protocol.NewMessage(protocol.MessageTypeSyncNotificationAck, msg.TransactionID, map[uint64]any{0: callbackErr == nil})
 	s.pingMutex.Lock()
-	err = s.conn.WriteMessage(ctx, ack)
+	ackErr := s.conn.WriteMessage(ctx, ack)
 	s.pingMutex.Unlock()
-	return err
+	return errors.Join(callbackErr, ackErr)
 }
 
 // Nested CBOR maps are decoded as map[any]any on some peers and map[uint64]any
@@ -109,6 +110,30 @@ func (s *Session) SyncNotifications(ctx context.Context, notification models.Not
 		return err
 	}
 
+	// Keep optional notification fields below the protocol's 64 KiB frame
+	// ceiling. Oversized icons are omitted; text is bounded before encoding.
+	if len(notification.IconData) > 8*1024 {
+		notification.IconData = nil
+	}
+	if len(notification.AppName) > 1024 {
+		notification.AppName = truncateUTF8(notification.AppName, 1024)
+	}
+	if len(notification.AppIcon) > 1024 {
+		notification.AppIcon = truncateUTF8(notification.AppIcon, 1024)
+	}
+	if len(notification.Summary) > 4*1024 {
+		notification.Summary = truncateUTF8(notification.Summary, 4*1024)
+	}
+	if len(notification.Body) > 16*1024 {
+		notification.Body = truncateUTF8(notification.Body, 16*1024)
+	}
+	if len(notification.Actions) > 16 {
+		notification.Actions = notification.Actions[:16]
+	}
+	if len(notification.Hints) > 32 {
+		notification.Hints = nil
+	}
+
 	payload := map[uint64]interface{}{
 		1: notification.AppName,
 		2: notification.ReplacesID,
@@ -122,6 +147,25 @@ func (s *Session) SyncNotifications(ctx context.Context, notification models.Not
 	}
 
 	msg := protocol.NewMessage(protocol.MessageTypeSyncNotification, transactionID, payload)
+	encoded, err := protocol.EncodeMessage(msg)
+	if err != nil {
+		return fmt.Errorf("session: encode notification: %w", err)
+	}
+	if len(encoded) > int(protocol.DefaultMaxFrameSize) {
+		// Hints and icons are optional and can dominate the serialized size.
+		msg.Payload[7] = map[string]any{}
+		msg.Payload[9] = []byte(nil)
+		msg.Payload[6] = []string{}
+		msg.Payload[5] = truncateUTF8(notification.Body, 8*1024)
+		msg.Payload[4] = truncateUTF8(notification.Summary, 2*1024)
+		encoded, err = protocol.EncodeMessage(msg)
+		if err != nil {
+			return fmt.Errorf("session: encode bounded notification: %w", err)
+		}
+		if len(encoded) > int(protocol.DefaultMaxFrameSize) {
+			return errors.New("session: notification payload exceeds protocol frame limit")
+		}
+	}
 
 	response, err := s.sendRequest(ctx, msg)
 	if err != nil {
@@ -131,6 +175,9 @@ func (s *Session) SyncNotifications(ctx context.Context, notification models.Not
 	if response.Type != protocol.MessageTypeSyncNotificationAck ||
 		!bytes.Equal(response.TransactionID, transactionID) {
 		return errors.New("session: invalid SYNC_NOTIFICATION_ACK response")
+	}
+	if accepted, ok := response.Payload[0].(bool); ok && !accepted {
+		return errors.New("session: peer rejected notification synchronization")
 	}
 
 	return nil
@@ -160,6 +207,20 @@ func (s *Session) ClearNotification(ctx context.Context, id uint32) error {
 		!bytes.Equal(response.TransactionID, transactionID) {
 		return errors.New("session: invalid CLEAR_NOTIFICATION_ACK response")
 	}
+	if accepted, ok := response.Payload[0].(bool); ok && !accepted {
+		return errors.New("session: peer rejected notification clear")
+	}
 
 	return nil
+}
+
+func truncateUTF8(value string, limit int) string {
+	if len(value) <= limit {
+		return value
+	}
+	value = value[:limit]
+	for len(value) > 0 && !utf8.ValidString(value) {
+		value = value[:len(value)-1]
+	}
+	return value
 }

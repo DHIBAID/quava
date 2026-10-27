@@ -10,7 +10,11 @@ func Duration(milliseconds int64, fallback time.Duration) time.Duration {
 	if milliseconds <= 0 {
 		return fallback
 	}
-
+	const maxTimeout = 3 * time.Minute
+	maxMS := int64(maxTimeout / time.Millisecond)
+	if milliseconds > maxMS {
+		milliseconds = maxMS
+	}
 	return time.Duration(milliseconds) * time.Millisecond
 }
 

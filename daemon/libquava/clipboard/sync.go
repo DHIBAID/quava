@@ -81,7 +81,22 @@ func (c *ClipboardService) StartClipboardService(ctx context.Context) error {
 	return nil
 }
 
+// RememberContent records content applied from a remote peer so the local
+// clipboard watcher does not immediately echo that same content back.
+func (c *ClipboardService) RememberContent(content models.ClipboardContent) {
+	if c == nil {
+		return
+	}
+	c.pendingMutex.Lock()
+	c.Clipboard = models.ClipboardContent{ContentType: content.ContentType, Content: bytes.Clone(content.Content)}
+	c.LastUpdated = time.Now()
+	c.pendingMutex.Unlock()
+}
+
 func (c *ClipboardService) PushClipboardContent(ctx context.Context, content models.ClipboardContent) error {
+	if len(content.Content) > 48*1024 {
+		return errors.New("clipboard: content exceeds 48 KiB sync limit")
+	}
 	c.pendingMutex.Lock()
 
 	if c.Clipboard.ContentType == content.ContentType &&

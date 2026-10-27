@@ -1,37 +1,28 @@
-// quavad owns Quava's durable state, discovery, pairing, and authenticated sessions.
-// It is intended to run continuously; clients use its owner-only Unix socket.
 package main
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
 	"net"
 	"os"
+	"os/signal"
 	"path/filepath"
-	"quavad/models"
-	"quavad/utils"
 	"strconv"
-	"strings"
 	"sync"
+	"syscall"
 	"time"
-
-	clip "golang.design/x/clipboard"
 
 	"libquava/clipboard"
 	"libquava/config"
-	"libquava/discovery"
-	lq "libquava/models"
+	"libquava/inputs"
 	"libquava/notifications"
-
-	"libquava/pairing"
-	"libquava/protocol"
-	"libquava/session"
+	"quavad/models"
 )
 
 type Daemon struct {
+	ctx                  context.Context
 	store                *config.Store
 	listener             net.Listener
 	mu                   sync.Mutex
@@ -39,9 +30,19 @@ type Daemon struct {
 	clipboard            *clipboard.ClipboardService
 	dbusNotifications    *notifications.DBusNotificationService
 	androidNotifications *notifications.AndroidNotificationBridge
+	inputMu              sync.Mutex
+	inputDispatchMu      sync.Mutex
+	input                inputs.Emulator
+	inputEnabled         map[string]bool
+	inputOwner           string
+	clipboardReady       bool
+	connMu               sync.Mutex
+	connections          map[net.Conn]struct{}
 }
 
 func main() {
+	runCtx, stopSignals := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stopSignals()
 	store, err := config.Open("")
 	if err != nil {
 		fatal(err)
@@ -70,19 +71,24 @@ func main() {
 	}
 
 	d := &Daemon{
-		store:    store,
-		listener: listener,
-		sessions: map[string]*models.ManagedSession{},
+		ctx:          runCtx,
+		store:        store,
+		listener:     listener,
+		sessions:     map[string]*models.ManagedSession{},
+		inputEnabled: map[string]bool{},
+		connections:  map[net.Conn]struct{}{},
 	}
 
 	// Init clipboard service
 	d.clipboard = clipboard.NewClipboardService(d.pushClipboardContent)
 
-	clipboardCtx, clipboardCancel := context.WithCancel(context.Background())
+	clipboardCtx, clipboardCancel := context.WithCancel(runCtx)
 	defer clipboardCancel()
 
 	if err := d.clipboard.StartClipboardService(clipboardCtx); err != nil {
 		log.Printf("clipboard: failed to start: %v", err)
+	} else {
+		d.clipboardReady = true
 	}
 	defer d.clipboard.StopClipboardService()
 
@@ -96,7 +102,7 @@ func main() {
 		defer d.androidNotifications.Close()
 	}
 
-	notifCtx, notifCancel := context.WithCancel(context.Background())
+	notifCtx, notifCancel := context.WithCancel(runCtx)
 	defer notifCancel()
 
 	if err := d.dbusNotifications.StartNotificationService(notifCtx); err != nil {
@@ -111,90 +117,31 @@ func main() {
 		}
 	}()
 
+	var handlers sync.WaitGroup
+	go func() {
+		<-runCtx.Done()
+		_ = listener.Close()
+	}()
 	for {
-		connection, err := listener.Accept()
-		if err != nil {
-			return
+		connection, acceptErr := listener.Accept()
+		if acceptErr != nil {
+			if runCtx.Err() != nil || errors.Is(acceptErr, net.ErrClosed) {
+				break
+			}
+			log.Printf("ipc: accept failed: %v", acceptErr)
+			time.Sleep(100 * time.Millisecond)
+			continue
 		}
-
-		go d.handle(connection)
+		handlers.Add(1)
+		go func(conn net.Conn) {
+			defer handlers.Done()
+			d.handle(conn)
+		}(connection)
 	}
+	d.shutdown()
+	handlers.Wait()
 }
 
-func (d *Daemon) pushClipboardContent(ctx context.Context, content lq.ClipboardContent) error {
-	d.mu.Lock()
-
-	activeSessions := make([]*session.Session, 0, len(d.sessions))
-
-	for _, managed := range d.sessions {
-		if managed.Active != nil {
-			activeSessions = append(activeSessions, managed.Active)
-		}
-	}
-
-	d.mu.Unlock()
-
-	var errs []error
-
-	for _, active := range activeSessions {
-		if err := active.SyncClipboard(ctx, content); err != nil {
-			errs = append(errs, err)
-		}
-	}
-
-	return errors.Join(errs...)
-}
-
-func (d *Daemon) pushNotificationContent(ctx context.Context, content lq.NotificationContent) error {
-	d.mu.Lock()
-
-	activeSessions := make([]*session.Session, 0, len(d.sessions))
-
-	for deviceID, managed := range d.sessions {
-		if managed.Active != nil && notificationSyncsToClient(d.store.NotificationSync(deviceID)) {
-			activeSessions = append(activeSessions, managed.Active)
-		}
-	}
-
-	d.mu.Unlock()
-
-	var errs []error
-
-	for _, active := range activeSessions {
-		if err := active.SyncNotifications(ctx, content); err != nil {
-			errs = append(errs, err)
-		}
-	}
-
-	return errors.Join(errs...)
-}
-
-func (d *Daemon) clearNotificationContent(ctx context.Context, id uint32) error {
-	d.mu.Lock()
-
-	activeSessions := make([]*session.Session, 0, len(d.sessions))
-
-	for deviceID, managed := range d.sessions {
-		if managed.Active != nil && notificationSyncsToClient(d.store.NotificationSync(deviceID)) {
-			activeSessions = append(activeSessions, managed.Active)
-		}
-	}
-
-	d.mu.Unlock()
-
-	var errs []error
-
-	for _, active := range activeSessions {
-		if err := active.ClearNotification(ctx, id); err != nil {
-			errs = append(errs, err)
-		}
-	}
-
-	return errors.Join(errs...)
-}
-
-// systemd passes an already-bound listener as file descriptor 3. Keeping the
-// socket owned by systemd lets a CLI connection activate the daemon safely.
 func systemdListener() (net.Listener, bool, error) {
 	fds, err := strconv.Atoi(os.Getenv("LISTEN_FDS"))
 	if err != nil || fds == 0 {
@@ -220,460 +167,4 @@ func systemdListener() (net.Listener, bool, error) {
 func fatal(err error) {
 	fmt.Fprintln(os.Stderr, "quavad:", err)
 	os.Exit(1)
-}
-
-func (d *Daemon) handle(connection net.Conn) {
-	defer func() { _ = connection.Close() }()
-
-	decoder, encoder := json.NewDecoder(connection), json.NewEncoder(connection)
-	var req models.Request
-
-	if err := decoder.Decode(&req); err != nil {
-		_ = encoder.Encode(models.Response{Error: err.Error()})
-		return
-	}
-
-	req.PeerDeviceID = strings.ToLower(strings.TrimSpace(req.PeerDeviceID))
-	if req.Command != "devices" && req.Command != "discover" && req.PeerDeviceID == "" {
-		_ = encoder.Encode(models.Response{Error: "peer_device_id is required"})
-		return
-	}
-
-	switch req.Command {
-	case "devices":
-		d.devices(req, encoder)
-
-	case "discover":
-		d.discover(req, encoder)
-
-	case "pair":
-		d.pair(req, decoder, encoder)
-
-	case "connect":
-		d.connect(req, encoder)
-
-	case "disconnect":
-		d.disconnect(req, encoder)
-
-	case "ping":
-		d.ping(req, encoder)
-
-	case "ring":
-		d.ring(req, encoder)
-
-	case "clipboard-push":
-		d.clipboardPush(req, encoder)
-
-	case "clipboard-service-start":
-		d.clipboardServiceStart(req, encoder)
-
-	case "clipboard-service-stop":
-		d.clipboardServiceStop(req, encoder)
-
-	case "notif-sync-both":
-		d.setNotificationSync(req, encoder, config.NotificationSyncBoth)
-
-	case "notif-sync-stop":
-		d.setNotificationSync(req, encoder, config.NotificationSyncNone)
-
-	case "notif-sync-toclient":
-		d.setNotificationSync(req, encoder, config.NotificationSyncToClient)
-
-	case "notif-sync-tohost":
-		d.setNotificationSync(req, encoder, config.NotificationSyncToHost)
-
-	default:
-		_ = encoder.Encode(models.Response{Error: fmt.Sprintf("unsupported daemon command %q", req.Command)})
-	}
-}
-
-func (d *Daemon) devices(req models.Request, enc *json.Encoder) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-
-	connected := make([]string, 0, len(d.sessions))
-	for deviceID, managed := range d.sessions {
-		if managed.Active != nil {
-			connected = append(connected, deviceID)
-		}
-	}
-
-	if req.PeerDeviceID == "" {
-		_ = enc.Encode(models.Response{Devices: d.store.Devices(), ConnectedDeviceIDs: connected})
-		return
-	}
-
-	device, ok := d.store.Device(req.PeerDeviceID)
-	if !ok {
-		_ = enc.Encode(models.Response{Error: "peer device not found"})
-		return
-	}
-
-	_ = enc.Encode(models.Response{Device: &device})
-}
-
-func (d *Daemon) discover(req models.Request, enc *json.Encoder) {
-	ctx, cancel := context.WithTimeout(context.Background(), utils.Duration(req.TimeoutMS, 10*time.Second))
-	defer cancel()
-
-	devices, err := discovery.Discover(ctx)
-	if err != nil && ctx.Err() == nil {
-		_ = enc.Encode(models.Response{Error: err.Error()})
-		return
-	}
-
-	_ = enc.Encode(models.Response{Discovered: devices})
-}
-
-func (d *Daemon) pair(req models.Request, dec *json.Decoder, enc *json.Encoder) {
-	ctx, cancel := context.WithTimeout(context.Background(), utils.Duration(req.TimeoutMS, 2*time.Minute))
-	defer cancel()
-
-	client, err := discovery.NewClient()
-	if err != nil {
-		_ = enc.Encode(models.Response{Error: err.Error()})
-		return
-	}
-
-	defer func() { _ = client.Close() }()
-	remote, err := client.Find(ctx, req.PeerDeviceID)
-
-	if err != nil {
-		_ = enc.Encode(models.Response{Error: err.Error()})
-		return
-	}
-
-	connection, err := remote.Connect(ctx)
-	if err != nil {
-		_ = enc.Encode(models.Response{Error: err.Error()})
-		return
-	}
-
-	defer func() { _ = connection.Close() }()
-	result, err := pairing.Initiate(ctx, connection.ProtocolConn(), lq.InitiatorOptions{DeviceName: utils.LocalDeviceName(), RemoteDeviceName: remote.Name, ExpectedPeerDeviceID: req.PeerDeviceID}, func(code uint32, peerName string) (bool, error) {
-		if err := enc.Encode(models.Response{Event: "pairing_code", Code: code, PeerName: peerName}); err != nil {
-			return false, err
-		}
-
-		var confirmation models.Request
-		if err := dec.Decode(&confirmation); err != nil {
-			return false, err
-		}
-
-		if confirmation.Command != "confirm_pairing" || confirmation.Confirm == nil {
-			return false, errors.New("expected pairing confirmation")
-		}
-
-		return *confirmation.Confirm, nil
-	})
-
-	if err != nil {
-		_ = enc.Encode(models.Response{Error: err.Error()})
-		return
-	}
-
-	if result.PeerDeviceID != req.PeerDeviceID {
-		_ = enc.Encode(models.Response{Error: "advertised peer_device_id does not match pairing identity"})
-		return
-	}
-
-	// pairing persists through its own config transaction; refresh our daemon view
-	// before accepting a follow-up connect request.
-	if refreshed, refreshErr := config.Open(""); refreshErr == nil {
-		d.mu.Lock()
-		d.store = refreshed
-		d.mu.Unlock()
-	}
-
-	_ = enc.Encode(models.Response{Device: result})
-}
-
-func (d *Daemon) connect(req models.Request, enc *json.Encoder) {
-	d.mu.Lock()
-	peer, ok := d.store.Device(req.PeerDeviceID)
-
-	if !ok {
-		d.mu.Unlock()
-		_ = enc.Encode(models.Response{Error: "peer device is not paired"})
-		return
-	}
-
-	identity, ok := d.store.Identity()
-	if !ok {
-		d.mu.Unlock()
-		_ = enc.Encode(models.Response{Error: "local identity not found"})
-		return
-	}
-
-	if _, exists := d.sessions[peer.PeerDeviceID]; exists {
-		d.mu.Unlock()
-		_ = enc.Encode(models.Response{})
-		return
-	}
-	ctx, cancel := context.WithCancel(context.Background())
-	d.sessions[peer.PeerDeviceID] = &models.ManagedSession{Cancel: cancel}
-	d.mu.Unlock()
-
-	go d.runSession(ctx, identity, peer)
-
-	_ = enc.Encode(models.Response{})
-}
-
-// disconnect cancels the managed session for one peer. runSession performs the
-// remaining cleanup and removes the entry once the protocol connection closes.
-func (d *Daemon) disconnect(req models.Request, enc *json.Encoder) {
-	d.mu.Lock()
-	managed := d.sessions[req.PeerDeviceID]
-	if managed == nil {
-		d.mu.Unlock()
-		_ = enc.Encode(models.Response{Error: "peer device is not connected"})
-		return
-	}
-	cancel := managed.Cancel
-	d.mu.Unlock()
-
-	if cancel != nil {
-		cancel()
-	}
-	_ = enc.Encode(models.Response{})
-}
-
-func (d *Daemon) runSession(ctx context.Context, identity lq.IdentityFile, peer lq.PairResult) {
-	client, err := discovery.NewClient()
-
-	if err != nil {
-		d.clearSession(peer.PeerDeviceID)
-		return
-	}
-
-	defer func() { _ = client.Close() }()
-
-	if err := session.Run(ctx, identity, peer, func(dialCtx context.Context) (*protocol.Conn, error) {
-		device, err := client.Find(dialCtx, peer.PeerDeviceID)
-		if err != nil {
-			return nil, err
-		}
-
-		connection, err := device.Connect(dialCtx)
-		if err != nil {
-			return nil, err
-		}
-
-		return connection.ProtocolConn(), nil
-	}, func(active *session.Session) {
-		active.SetAndroidNotificationHandler(func(ctx context.Context, notification lq.AndroidNotificationContent) error {
-			if d.androidNotifications == nil || !d.notificationSyncsToHost(peer.PeerDeviceID) {
-				return nil
-			}
-			return d.androidNotifications.Show(ctx, notification)
-		})
-		d.mu.Lock()
-		if managed := d.sessions[peer.PeerDeviceID]; managed != nil {
-			managed.Active = active
-		}
-
-		d.mu.Unlock()
-	}, func(error) {
-		d.mu.Lock()
-		if managed := d.sessions[peer.PeerDeviceID]; managed != nil {
-			managed.Active = nil
-		}
-
-		d.mu.Unlock()
-	}); err != nil && !errors.Is(err, context.Canceled) {
-		log.Printf("session: %s ended: %v", peer.PeerDeviceID, err)
-	}
-
-	d.clearSession(peer.PeerDeviceID)
-}
-
-func (d *Daemon) sendAndroidNotificationAction(ctx context.Context, key string, action int, reply string) error {
-	return d.withActiveSession(func(active *session.Session) error {
-		return active.SendAndroidNotificationAction(ctx, key, action, reply)
-	})
-}
-
-func (d *Daemon) dismissAndroidNotification(ctx context.Context, key string) error {
-	return d.withActiveSession(func(active *session.Session) error { return active.DismissAndroidNotification(ctx, key) })
-}
-
-func (d *Daemon) withActiveSession(fn func(*session.Session) error) error {
-	d.mu.Lock()
-	active := make([]*session.Session, 0, len(d.sessions))
-	for _, managed := range d.sessions {
-		if managed.Active != nil {
-			active = append(active, managed.Active)
-		}
-	}
-	d.mu.Unlock()
-	var errs []error
-	for _, s := range active {
-		if err := fn(s); err != nil {
-			errs = append(errs, err)
-		}
-	}
-	return errors.Join(errs...)
-}
-
-func (d *Daemon) clearSession(id string) {
-	d.mu.Lock()
-	delete(d.sessions, id)
-	d.mu.Unlock()
-}
-
-func (d *Daemon) ping(req models.Request, enc *json.Encoder) {
-	d.mu.Lock()
-
-	managed := d.sessions[req.PeerDeviceID]
-	var active *session.Session
-
-	if managed != nil {
-		active = managed.Active
-	}
-
-	d.mu.Unlock()
-
-	if active == nil {
-		_ = enc.Encode(models.Response{Error: "no active session; use connect first"})
-		return
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), utils.Duration(req.TimeoutMS, 15*time.Second))
-	defer cancel()
-
-	if err := active.SendPing(ctx); err != nil {
-		_ = enc.Encode(models.Response{Error: err.Error()})
-		return
-	}
-
-	_ = enc.Encode(models.Response{})
-}
-
-func (d *Daemon) ring(req models.Request, enc *json.Encoder) {
-	d.mu.Lock()
-
-	managed := d.sessions[req.PeerDeviceID]
-	var active *session.Session
-
-	if managed != nil {
-		active = managed.Active
-	}
-
-	d.mu.Unlock()
-
-	if active == nil {
-		_ = enc.Encode(models.Response{Error: "no active session; use connect first"})
-		return
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), utils.Duration(req.TimeoutMS, 15*time.Second))
-	defer cancel()
-
-	if err := active.SendRing(ctx); err != nil {
-		_ = enc.Encode(models.Response{Error: err.Error()})
-		return
-	}
-
-	_ = enc.Encode(models.Response{})
-}
-
-func (d *Daemon) clipboardPush(req models.Request, enc *json.Encoder) {
-	d.mu.Lock()
-
-	managed := d.sessions[req.PeerDeviceID]
-	var active *session.Session
-
-	if managed != nil {
-		active = managed.Active
-	}
-
-	d.mu.Unlock()
-
-	if active == nil {
-		_ = enc.Encode(models.Response{Error: "no active session; use connect first"})
-		return
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), utils.Duration(req.TimeoutMS, 15*time.Second))
-	defer cancel()
-
-	content, err := clip.Read(ctx, clip.FmtText)
-	if err != nil {
-		enc.Encode(models.Response{Error: "failed to read clipboard content"})
-		return
-	}
-
-	clipboardContent := lq.ClipboardContent{
-		ContentType: "text", // to support others later
-		Content:     content,
-	}
-
-	err = d.clipboard.PushClipboardContent(ctx, clipboardContent)
-	if err != nil {
-		_ = enc.Encode(models.Response{Error: err.Error()})
-		return
-	}
-
-	_ = enc.Encode(models.Response{})
-
-}
-
-func (d *Daemon) clipboardServiceStart(_ models.Request, enc *json.Encoder) {
-	if d.clipboard == nil {
-		d.clipboard = clipboard.NewClipboardService(d.pushClipboardContent)
-	}
-
-	if err := d.clipboard.StartClipboardService(context.Background()); err != nil {
-		if err.Error() != "clipboard: service already running" {
-			log.Printf("clipboard: failed to start: %v", err)
-			_ = enc.Encode(models.Response{Error: err.Error()})
-			return
-		}
-	}
-
-	_ = enc.Encode(models.Response{})
-}
-
-func (d *Daemon) clipboardServiceStop(_ models.Request, enc *json.Encoder) {
-	if d.clipboard == nil {
-		_ = enc.Encode(models.Response{})
-		return
-	}
-
-	d.clipboard.StopClipboardService()
-	_ = enc.Encode(models.Response{})
-}
-
-func (d *Daemon) setNotificationSync(req models.Request, enc *json.Encoder, direction config.NotificationSyncDirection) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-
-	if _, paired := d.store.Device(req.PeerDeviceID); !paired {
-		_ = enc.Encode(models.Response{Error: "peer device is not paired"})
-		return
-	}
-	if err := d.store.SetNotificationSync(req.PeerDeviceID, direction); err != nil {
-		_ = enc.Encode(models.Response{Error: err.Error()})
-		return
-	}
-	if err := d.store.Save(); err != nil {
-		_ = enc.Encode(models.Response{Error: err.Error()})
-		return
-	}
-	_ = enc.Encode(models.Response{})
-}
-
-func (d *Daemon) notificationSyncsToHost(deviceID string) bool {
-	d.mu.Lock()
-	direction := d.store.NotificationSync(deviceID)
-	d.mu.Unlock()
-	return notificationSyncsToHost(direction)
-}
-
-func notificationSyncsToClient(direction config.NotificationSyncDirection) bool {
-	return direction == config.NotificationSyncBoth || direction == config.NotificationSyncToClient
-}
-
-func notificationSyncsToHost(direction config.NotificationSyncDirection) bool {
-	return direction == config.NotificationSyncBoth || direction == config.NotificationSyncToHost
 }

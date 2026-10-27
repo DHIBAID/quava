@@ -33,12 +33,19 @@ const (
 	MessageTypeSyncNotificationAck  = 0x27
 	MessageTypeClearNotification    = 0x28
 	MessageTypeClearNotificationAck = 0x29
+
 	// Android-originated notification controls. These use Android's stable
 	// StatusBarNotification key rather than the D-Bus numeric ID.
 	MessageTypeNotificationAction            = 0x2a
 	MessageTypeNotificationActionAck         = 0x2b
 	MessageTypeDismissAndroidNotification    = 0x2c
 	MessageTypeDismissAndroidNotificationAck = 0x2d
+	// Someone needs to find a better name for these constants.
+
+	// InputEvent is sent asynchronously by Android after a session is ready.
+	// InputEventAck mirrors its transaction ID after the host has accepted it.
+	MessageTypeInputEvent    = 0x2e
+	MessageTypeInputEventAck = 0x2f
 
 	// PingPayloadSilent marks a heartbeat Ping that should not generate a
 	// user-visible notification on the receiving device.

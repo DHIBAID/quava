@@ -15,6 +15,7 @@ var Connect = &cobra.Command{
 	Short: "Connect to a peer device.",
 	Long:  `Connect to a peer device by providing its device ID.`,
 
+	Args: cobra.ExactArgs(1),
 	RunE: func(command *cobra.Command, args []string) error {
 		return connect(args)
 	},

@@ -10,10 +10,12 @@ import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
+import androidx.activity.compose.BackHandler
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.*
 import androidx.core.content.ContextCompat
 import com.dhibaid.quava.ui.HomeScreen
+import com.dhibaid.quava.ui.RemoteControlScreen
 
 class MainActivity : ComponentActivity() {
     private var service by mutableStateOf<QuavaService?>(null)
@@ -52,6 +54,7 @@ class MainActivity : ComponentActivity() {
 
         setContent {
             var settingsOpen by remember { mutableStateOf(false) }
+            var remoteControlOpen by remember { mutableStateOf(false) }
             val launcher = rememberLauncherForActivityResult(
                 ActivityResultContracts.RequestPermission()
             ) { granted ->
@@ -73,17 +76,25 @@ class MainActivity : ComponentActivity() {
             }
 
             service?.let {
-                if (settingsOpen) {
+                when {
+                    remoteControlOpen -> {
+                        BackHandler { remoteControlOpen = false }
+                        RemoteControlScreen(server = it.server, onBack = { remoteControlOpen = false })
+                    }
+                    settingsOpen -> {
                     com.dhibaid.quava.ui.NotificationSettingsScreen(
                         onBack = { settingsOpen = false }
                     )
-                } else HomeScreen(
-                    server = it.server,
-                    onSettingsClick = { settingsOpen = true },
-                    onEnableNotificationAccess = {
-                        startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))
-                    },
-                )
+                    }
+                    else -> HomeScreen(
+                        server = it.server,
+                        onSettingsClick = { settingsOpen = true },
+                        onRemoteControlClick = { remoteControlOpen = true },
+                        onEnableNotificationAccess = {
+                            startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))
+                        },
+                    )
+                }
             }
         }
     }

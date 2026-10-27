@@ -58,6 +58,7 @@ fun HomeScreen(
     server: PairingServer,
     onEnableNotificationAccess: () -> Unit = {},
     onSettingsClick: () -> Unit = {},
+    onRemoteControlClick: () -> Unit = {},
     onUnpairClick: () -> Unit = {},
     onAboutClick: () -> Unit = {},
 ) {
@@ -137,6 +138,7 @@ fun HomeScreen(
                     state.connected -> {
                         ActiveSessionCard(
                             status = state.status,
+                            onRemoteControlClick = onRemoteControlClick,
                         )
                     }
 
@@ -442,6 +444,7 @@ private fun PairingRequestCard(
 @Composable
 private fun ActiveSessionCard(
     status: String,
+    onRemoteControlClick: () -> Unit,
 ) {
     val color = MaterialTheme.colorScheme
 
@@ -489,7 +492,8 @@ private fun ActiveSessionCard(
                 )
 
                 SessionAction(
-                    title = "Screen",
+                    title = "Remote Input",
+                    onClick = onRemoteControlClick,
                     modifier = Modifier.weight(1f),
                 )
             }
@@ -500,12 +504,11 @@ private fun ActiveSessionCard(
 @Composable
 private fun SessionAction(
     title: String,
+    onClick: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     OutlinedButton(
-        onClick = {
-            // TODO
-        },
+        onClick = onClick,
         modifier = modifier,
     ) {
         Text(title)

@@ -1,8 +1,9 @@
 [Unit]
 Description=Quava daemon
 Requires=quavad.socket
-After=quavad.socket network-online.target
+After=quavad.socket network-online.target graphical-session.target
 Wants=network-online.target
+PartOf=graphical-session.target
 
 [Service]
 Type=simple

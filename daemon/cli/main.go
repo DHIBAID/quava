@@ -15,6 +15,7 @@ func init() {
 		commands.Ring,
 		commands.Clipboard,
 		commands.Notification,
+		commands.Input,
 	)
 }
 
