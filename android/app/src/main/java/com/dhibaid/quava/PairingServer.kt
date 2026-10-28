@@ -33,6 +33,8 @@ class PairingServer(
     private val protocol = PairingProtocol(context.applicationContext)
     private val _state = MutableStateFlow(PairingState())
     val state: StateFlow<PairingState> = _state.asStateFlow()
+    private val _mediaState = MutableStateFlow(HostMediaState())
+    val mediaState: StateFlow<HostMediaState> = _mediaState.asStateFlow()
 
     fun localDeviceIdHex(): String = protocol.localDeviceIdHex()
 
@@ -187,6 +189,7 @@ class PairingServer(
                     }
 
                     quavaService?.onConnected(hostName)
+                    sendMediaControl(MediaControl(MediaActions.STATE))
                 },
                 onPing = { quavaService?.onPing(peerName) },
 
@@ -204,7 +207,8 @@ class PairingServer(
                     quavaService?.onNotificationClear(message)
                 },
                 onNotificationAction = { message -> quavaService?.onAndroidNotificationAction(message) },
-                onAndroidNotificationDismiss = { message -> quavaService?.onAndroidNotificationDismiss(message) }
+                onAndroidNotificationDismiss = { message -> quavaService?.onAndroidNotificationDismiss(message) },
+                onMediaAck = ::updateMediaState,
             )
         } finally {
             // A replacement connection may already be active when an older
@@ -249,6 +253,166 @@ class PairingServer(
 
     fun sendRemoteInput(input: RemoteInput) {
         remoteInputDispatcher.send(input)
+    }
+
+    fun sendMediaControl(control: MediaControl) {
+        val session = synchronized(lock) { activeSession }
+        if (session == null) {
+            Log.w(TAG, "cannot control host media: no active session")
+            _mediaState.value = HostMediaState(error = "No active connection to the host")
+            return
+        }
+
+        scope.launch(Dispatchers.IO) {
+            try {
+                Log.d(TAG, "sending host media command=${control.action}")
+                protocol.sendMediaControl(session, control)
+                quavaService?.showHostMediaControls()
+            } catch (e: Exception) {
+                Log.e(TAG, "failed to send host media control", e)
+                _mediaState.value = HostMediaState(error = "Could not send media control: ${e.message}")
+            }
+        }
+    }
+
+
+    private fun updateMediaState(message: PairingProtocol.Message) {
+        val accepted = message.payload[0] as? Boolean ?: false
+        val previous = _mediaState.value
+
+        fun text(key: Int): String =
+            message.payload[key] as? String ?: ""
+
+        fun number(key: Int): Long =
+            (message.payload[key] as? Number)?.toLong() ?: 0L
+
+        val hasMediaState = message.payload.containsKey(3)
+
+        val devices = (message.payload[33] as? List<*>)
+            ?.mapNotNull { item ->
+                val fields = item as? Map<*, *> ?: return@mapNotNull null
+
+                fun field(key: Int): Any? =
+                    fields.entries.firstOrNull {
+                        (it.key as? Number)?.toInt() == key
+                    }?.value
+
+                val name = field(0) as? String
+                    ?: return@mapNotNull null
+
+                AudioOutputDevice(
+                    name = name,
+                    description = field(1) as? String ?: name,
+                    volume = (field(2) as? Number)?.toDouble() ?: 0.0,
+                    muted = field(3) as? Boolean ?: false,
+                    isDefault = field(4) as? Boolean ?: false,
+                )
+            } ?: previous.outputDevices
+
+        val next = previous.copy(
+            available = if (hasMediaState) true else previous.available,
+            error = if (accepted) {
+                null
+            } else {
+                message.payload[1] as? String
+                    ?: "Host rejected media command"
+            },
+            identity = if (hasMediaState) {
+                text(3).ifBlank { "Host media" }
+            } else {
+                previous.identity
+            },
+            title = if (hasMediaState) {
+                text(5).ifBlank { "Unknown title" }
+            } else {
+                previous.title
+            },
+            artists = if (hasMediaState) {
+                (message.payload[6] as? List<*>)
+                    ?.filterIsInstance<String>()
+                    ?.joinToString(", ")
+                    ?.ifBlank { "Unknown artist" }
+                    ?: "Unknown artist"
+            } else {
+                previous.artists
+            },
+            album = if (hasMediaState) text(7) else previous.album,
+            artworkUrl = if (hasMediaState) text(8) else previous.artworkUrl,
+            // Clear old artwork when a new media state has no artwork bytes.
+            artwork = if (hasMediaState) {
+                (message.payload[19] as? ByteArray)
+                    ?: if (
+                        text(5) == previous.title &&
+                        text(7) == previous.album
+                    ) {
+                        previous.artwork
+                    } else {
+                        null
+                    }
+            } else {
+                previous.artwork
+            },
+            playbackStatus = if (hasMediaState) {
+                text(4)
+            } else {
+                previous.playbackStatus
+            },
+            durationUs = if (hasMediaState) number(9) else previous.durationUs,
+            positionUs = if (hasMediaState) number(10) else previous.positionUs,
+            volume = if (hasMediaState) {
+                (message.payload[11] as? Number)?.toDouble()
+                    ?: previous.volume
+            } else {
+                previous.volume
+            },
+            shuffle = if (hasMediaState) {
+                message.payload[12] as? Boolean ?: previous.shuffle
+            } else {
+                previous.shuffle
+            },
+            loopStatus = if (hasMediaState) {
+                text(13).ifBlank { "None" }
+            } else {
+                previous.loopStatus
+            },
+            canGoPrevious = if (hasMediaState) {
+                message.payload[14] as? Boolean ?: previous.canGoPrevious
+            } else {
+                previous.canGoPrevious
+            },
+            canGoNext = if (hasMediaState) {
+                message.payload[15] as? Boolean ?: previous.canGoNext
+            } else {
+                previous.canGoNext
+            },
+            canSeek = if (hasMediaState) {
+                message.payload[16] as? Boolean ?: previous.canSeek
+            } else {
+                previous.canSeek
+            },
+            systemVolume = (message.payload[30] as? Number)?.toDouble()
+                ?: previous.systemVolume,
+            systemMuted = message.payload[31] as? Boolean
+                ?: previous.systemMuted,
+            outputDevice = text(32).ifBlank { previous.outputDevice },
+            outputDevices = devices,
+        )
+
+        _mediaState.value = next
+
+        Log.d(
+            "QuavaMedia",
+            "Track=${next.title}, status=${next.playbackStatus}, " +
+                    "positionUs=${next.positionUs}, durationUs=${next.durationUs}"
+        )
+
+        if (hasMediaState) {
+            quavaService?.updateHostMediaState(next)
+        }
+
+        if (!accepted) {
+            Log.w(TAG, "host rejected media control: ${message.payload[1]}")
+        }
     }
 
     fun confirmPairing() {

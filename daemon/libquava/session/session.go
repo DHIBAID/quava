@@ -516,6 +516,10 @@ func (s *Session) handleUnsolicited(ctx context.Context, msg protocol.Message) {
 		if err := s.handleIncomingClipboard(ctx, msg); err != nil {
 			log.Printf("session: handle incoming clipboard failed: %v", err)
 		}
+	case protocol.MessageTypeMultimedia:
+		if err := s.handleMultimediaCommand(ctx, msg); err != nil {
+			log.Printf("session: handle multimedia command failed: %v", err)
+		}
 	default:
 		// Ignore other unsolicited messages
 	}

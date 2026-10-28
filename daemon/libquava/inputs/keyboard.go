@@ -287,17 +287,17 @@ func asciiKey(r rune) (code int, shifted bool, ok bool) {
 		'\n': {28, false},
 		'\t': {15, false},
 		'-':  {12, false}, '_': {12, true},
-		'=':  {13, false}, '+': {13, true},
-		'[':  {26, false}, '{': {26, true},
-		']':  {27, false}, '}': {27, true},
+		'=': {13, false}, '+': {13, true},
+		'[': {26, false}, '{': {26, true},
+		']': {27, false}, '}': {27, true},
 		'\\': {43, false}, '|': {43, true},
-		';':  {39, false}, ':': {39, true},
+		';': {39, false}, ':': {39, true},
 		'\'': {40, false}, '"': {40, true},
-		'`':  {41, false}, '~': {41, true},
-		',':  {51, false}, '<': {51, true},
-		'.':  {52, false}, '>': {52, true},
-		'/':  {53, false}, '?': {53, true},
-		'!':  {2, true}, '@': {3, true},
+		'`': {41, false}, '~': {41, true},
+		',': {51, false}, '<': {51, true},
+		'.': {52, false}, '>': {52, true},
+		'/': {53, false}, '?': {53, true},
+		'!': {2, true}, '@': {3, true},
 		'#': {4, true}, '$': {5, true},
 		'%': {6, true}, '^': {7, true},
 		'&': {8, true}, '*': {9, true},
@@ -307,7 +307,6 @@ func asciiKey(r rune) (code int, shifted bool, ok bool) {
 	v, ok := m[r]
 	return v.code, v.shift, ok
 }
-
 
 // Android key codes are translated here rather than accepting Linux keycodes
 // from the client. The protocol remains independent of the host OS.

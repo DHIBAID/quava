@@ -18,6 +18,7 @@ import (
 	"libquava/config"
 	"libquava/inputs"
 	"libquava/notifications"
+	"libquava/session"
 	"quavad/models"
 )
 
@@ -77,6 +78,16 @@ func main() {
 		sessions:     map[string]*models.ManagedSession{},
 		inputEnabled: map[string]bool{},
 		connections:  map[net.Conn]struct{}{},
+	}
+
+	if err := session.StartMedia(runCtx); err != nil {
+		log.Printf("mpris: service unavailable: %v", err)
+	} else {
+		defer func() {
+			if err := session.StopMedia(); err != nil {
+				log.Printf("mpris: shutdown failed: %v", err)
+			}
+		}()
 	}
 
 	// Init clipboard service

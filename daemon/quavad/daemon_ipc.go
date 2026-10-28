@@ -44,7 +44,7 @@ func (d *Daemon) handle(connection net.Conn) {
 	}
 
 	req.PeerDeviceID = strings.ToLower(strings.TrimSpace(req.PeerDeviceID))
-	if req.Command != "devices" && req.Command != "discover" && req.PeerDeviceID == "" {
+	if req.Command != "devices" && req.Command != "discover" && !strings.HasPrefix(req.Command, "media-") && req.PeerDeviceID == "" {
 		_ = encoder.Encode(models.Response{Error: "peer_device_id is required"})
 		return
 	}
@@ -55,6 +55,18 @@ func (d *Daemon) handle(connection net.Conn) {
 
 	case "discover":
 		d.discover(req, encoder)
+
+	case "media-list":
+		d.mediaList(req, encoder)
+
+	case "media-active":
+		d.mediaActive(req, encoder)
+
+	case "media-set-active":
+		d.mediaSetActive(req, encoder)
+
+	case "media-play-pause", "media-next", "media-previous", "media-play", "media-pause", "media-stop", "media-seek", "media-shuffle", "media-loop", "media-volume":
+		d.mediaControl(req, encoder)
 
 	case "pair":
 		d.pair(req, decoder, encoder)

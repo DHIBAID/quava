@@ -269,9 +269,26 @@ class PairingProtocol(private val appContext: Context) {
         )
     }
 
-    internal fun sendAndroidNotification(session: RuntimeSession, notification: NotificationTransport.NotificationData) {
+    internal fun sendAndroidNotification(
+        session: RuntimeSession,
+        notification: NotificationTransport.NotificationData
+    ) {
         val actions = notification.actions.map { mapOf(1 to it.title, 2 to it.hasRemoteInput) }
-        writeMessage(session.output, Message(NOTIFICATION, session.transactionId, mapOf(1 to notification.key, 2 to notification.app, 3 to notification.title, 4 to notification.body, 5 to notification.icon, 6 to actions)))
+        writeMessage(
+            session.output,
+            Message(
+                NOTIFICATION,
+                session.transactionId,
+                mapOf(
+                    1 to notification.key,
+                    2 to notification.app,
+                    3 to notification.title,
+                    4 to notification.body,
+                    5 to notification.icon,
+                    6 to actions
+                )
+            )
+        )
     }
 
     internal fun sendAndroidNotificationDismiss(session: RuntimeSession, key: String) {
@@ -289,6 +306,22 @@ class PairingProtocol(private val appContext: Context) {
         )
     }
 
+    internal fun sendMediaControl(session: RuntimeSession, control: MediaControl) {
+        writeMessage(
+            session.output,
+            Message(
+                MULTIMEDIA, randomBytes(TRANSACTION_ID_BYTES), mapOf(
+                    1 to control.action,
+                    2 to control.busName,
+                    3 to control.offsetMs,
+                    4 to control.enabled,
+                    5 to control.loopStatus,
+                    6 to control.volume,
+                )
+            ),
+        )
+    }
+
     internal suspend fun runSession(
         session: RuntimeSession,
         onReady: (String) -> Unit,
@@ -299,6 +332,7 @@ class PairingProtocol(private val appContext: Context) {
         onNotificationClear: suspend (Message) -> Unit,
         onNotificationAction: suspend (Message) -> Unit,
         onAndroidNotificationDismiss: suspend (Message) -> Unit,
+        onMediaAck: (Message) -> Unit,
     ) {
         while (!session.socket.isClosed) {
             Log.d("Quava", "Waiting for session message...")
@@ -415,8 +449,23 @@ class PairingProtocol(private val appContext: Context) {
                     if (!accepted) Log.w("Quava", "Host rejected remote input")
                 }
 
-                NOTIFICATION_ACTION -> { onNotificationAction(message); writeMessage(session.output, Message(NOTIFICATION_ACTION_ACK, message.transactionId, emptyMap())) }
-                DISMISS_ANDROID_NOTIFICATION -> { onAndroidNotificationDismiss(message); writeMessage(session.output, Message(DISMISS_ANDROID_NOTIFICATION_ACK, message.transactionId, emptyMap())) }
+                MULTIMEDIA_ACK -> {
+                    onMediaAck(message)
+                }
+
+                NOTIFICATION_ACTION -> {
+                    onNotificationAction(message); writeMessage(
+                        session.output,
+                        Message(NOTIFICATION_ACTION_ACK, message.transactionId, emptyMap())
+                    )
+                }
+
+                DISMISS_ANDROID_NOTIFICATION -> {
+                    onAndroidNotificationDismiss(message); writeMessage(
+                        session.output,
+                        Message(DISMISS_ANDROID_NOTIFICATION_ACK, message.transactionId, emptyMap())
+                    )
+                }
 
                 else -> {
                     error("unexpected session message ${message.type}")
@@ -696,6 +745,8 @@ class PairingProtocol(private val appContext: Context) {
         private const val DISMISS_ANDROID_NOTIFICATION_ACK = 0x2dL
         private const val INPUT_EVENT = 0x2eL
         private const val INPUT_EVENT_ACK = 0x2fL
+        private const val MULTIMEDIA = 0x30L
+        private const val MULTIMEDIA_ACK = 0x31L
         private const val PING_SILENT = 0
         private const val MAX_FRAME_BYTES = 64 * 1024
         private const val PAIRING_TIMEOUT_MS = 120_000

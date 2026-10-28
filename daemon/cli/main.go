@@ -16,6 +16,7 @@ func init() {
 		commands.Clipboard,
 		commands.Notification,
 		commands.Input,
+		commands.Media,
 	)
 }
 

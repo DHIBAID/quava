@@ -30,6 +30,7 @@ class QuavaService : Service() {
     private lateinit var ringController: RingController
     private lateinit var clipboardService: ClipboardService
     private lateinit var hostNotificationManager: HostNotificationManager
+    private lateinit var hostMediaNotification: HostMediaNotification
 
     private val ringTimeoutHandler = Handler(Looper.getMainLooper())
 
@@ -60,6 +61,10 @@ class QuavaService : Service() {
         )
 
         nm.createNotificationChannel(
+            NotificationChannel(MEDIA_CHANNEL, "Host media controls", NotificationManager.IMPORTANCE_LOW)
+        )
+
+        nm.createNotificationChannel(
             NotificationChannel(
                 PING_CHANNEL,
                 "Quava pings",
@@ -84,6 +89,7 @@ class QuavaService : Service() {
         mdns = MdnsAdvertiser(this)
         ringController = RingController(this)
         hostNotificationManager = HostNotificationManager(this)
+        hostMediaNotification = HostMediaNotification(this)
         NotificationTransport.sender =
             { notification -> scope.launch(Dispatchers.IO) { server.sendAndroidNotification(notification) } }
         NotificationTransport.dismissSender =
@@ -109,6 +115,12 @@ class QuavaService : Service() {
     ): Int {
         when (intent?.action) {
             ACTION_STOP_RING -> stopRing()
+            ACTION_MEDIA_CONTROL -> {
+                intent.getStringExtra(EXTRA_MEDIA_ACTION)?.let { action ->
+                    scope.launch(Dispatchers.IO) { server.sendMediaControl(MediaControl(action)) }
+                }
+            }
+
             ACTION_CLEAR_HOST_NOTIFICATION -> {
                 val id = intent.getIntExtra(EXTRA_NOTIFICATION_ID, -1)
                 if (id >= 0) {
@@ -137,6 +149,33 @@ class QuavaService : Service() {
         val notif = foregroundNotification("Listening for connections")
         val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         nm.notify(FOREGROUND_NOTIFICATION_ID, notif)
+        if (::hostMediaNotification.isInitialized) hostMediaNotification.dismiss()
+    }
+
+    fun showHostMediaControls() {
+        if (::hostMediaNotification.isInitialized) hostMediaNotification.show()
+    }
+
+    fun updateHostMediaState(state: HostMediaState) {
+        if (!::hostMediaNotification.isInitialized) return
+
+        if (!state.available) {
+            hostMediaNotification.dismiss()
+            return
+        }
+
+        hostMediaNotification.updateMetadata(
+            trackTitle = state.title,
+            trackArtist = state.artists,
+            artworkBytes = state.artwork,
+            durationUs = state.durationUs
+        )
+
+        hostMediaNotification.updatePlaybackState(
+            playing = state.playbackStatus.equals("Playing", ignoreCase = true),
+            positionUs = state.positionUs,
+            durationUs = state.durationUs,
+        )
     }
 
     fun onPing(peerName: String) {
@@ -213,6 +252,7 @@ class QuavaService : Service() {
 
     override fun onDestroy() {
         stopRing()
+        if (::hostMediaNotification.isInitialized) hostMediaNotification.dismiss()
 
         if (::mdns.isInitialized) {
             mdns.stop()
@@ -341,18 +381,23 @@ class QuavaService : Service() {
 
         const val EXTRA_STOP_RING = "STOP_RING"
         const val EXTRA_NOTIFICATION_ID = "NOTIFICATION_ID"
+        const val EXTRA_MEDIA_ACTION = "MEDIA_ACTION"
+        const val EXTRA_OPEN_MEDIA = "OPEN_MEDIA"
 
         private const val TAG = "QuavaRing"
         private const val ACTION_STOP_RING = "com.dhibaid.quava.STOP_RING"
+        const val ACTION_MEDIA_CONTROL = "com.dhibaid.quava.MEDIA_CONTROL"
         const val ACTION_CLEAR_HOST_NOTIFICATION = "com.dhibaid.quava.CLEAR_HOST_NOTIFICATION"
 
         private const val CHANNEL = "quava"
         private const val PING_CHANNEL = "quava_pings"
         private const val RING_CHANNEL = "quava_rings"
+        const val MEDIA_CHANNEL = "quava_host_media"
 
         private const val FOREGROUND_NOTIFICATION_ID = 1
         private const val PING_NOTIFICATION_ID = 2
         private const val RING_NOTIFICATION_ID = 3
+        const val MEDIA_NOTIFICATION_ID = 4
 
         private const val RING_TIMEOUT_MS = 30_000L
     }

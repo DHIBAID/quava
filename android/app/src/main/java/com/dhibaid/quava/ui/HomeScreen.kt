@@ -59,6 +59,7 @@ fun HomeScreen(
     onEnableNotificationAccess: () -> Unit = {},
     onSettingsClick: () -> Unit = {},
     onRemoteControlClick: () -> Unit = {},
+    onMediaControlClick: () -> Unit = {},
     onUnpairClick: () -> Unit = {},
     onAboutClick: () -> Unit = {},
 ) {
@@ -139,6 +140,7 @@ fun HomeScreen(
                         ActiveSessionCard(
                             status = state.status,
                             onRemoteControlClick = onRemoteControlClick,
+                            onMediaControlClick = onMediaControlClick,
                         )
                     }
 
@@ -445,6 +447,7 @@ private fun PairingRequestCard(
 private fun ActiveSessionCard(
     status: String,
     onRemoteControlClick: () -> Unit,
+    onMediaControlClick: () -> Unit,
 ) {
     val color = MaterialTheme.colorScheme
 
@@ -497,6 +500,14 @@ private fun ActiveSessionCard(
                     modifier = Modifier.weight(1f),
                 )
             }
+
+            Spacer(Modifier.height(12.dp))
+
+            SessionAction(
+                title = "Host Media",
+                onClick = onMediaControlClick,
+                modifier = Modifier.fillMaxWidth(),
+            )
         }
     }
 }

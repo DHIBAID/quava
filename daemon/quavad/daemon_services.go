@@ -195,3 +195,39 @@ func (d *Daemon) notificationSyncsToHost(deviceID string) bool {
 	d.mu.Unlock()
 	return notificationSyncsToHost(direction)
 }
+
+func (d *Daemon) mediaList(_ models.Request, enc *json.Encoder) {
+	players, err := session.ListMediaPlayers()
+	if err != nil {
+		_ = enc.Encode(models.Response{Error: err.Error()})
+		return
+	}
+	_ = enc.Encode(models.Response{Players: players})
+}
+
+func (d *Daemon) mediaActive(_ models.Request, enc *json.Encoder) {
+	player, err := session.ActiveMediaPlayer()
+	if err != nil {
+		_ = enc.Encode(models.Response{Error: err.Error()})
+		return
+	}
+	_ = enc.Encode(models.Response{Player: &player})
+}
+
+func (d *Daemon) mediaSetActive(req models.Request, enc *json.Encoder) {
+	player, err := session.SetActiveMediaPlayer(req.BusName)
+	if err != nil {
+		_ = enc.Encode(models.Response{Error: err.Error()})
+		return
+	}
+	_ = enc.Encode(models.Response{Player: &player})
+}
+
+func (d *Daemon) mediaControl(req models.Request, enc *json.Encoder) {
+	err := session.ControlMedia(session.MediaCommand{Command: req.Command, BusName: req.BusName, OffsetMS: req.OffsetMS, Enabled: req.Enabled, LoopStatus: req.LoopStatus, Volume: req.Volume})
+	if err != nil {
+		_ = enc.Encode(models.Response{Error: err.Error()})
+		return
+	}
+	_ = enc.Encode(models.Response{})
+}

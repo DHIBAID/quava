@@ -69,5 +69,7 @@ internal class RemoteInputDispatcher(
         val input: RemoteInput,
     )
 
-    private companion object { const val TAG = "QuavaRemoteInput" }
+    private companion object {
+        const val TAG = "QuavaRemoteInput"
+    }
 }
