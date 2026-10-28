@@ -55,6 +55,10 @@ Need to see how the alternatives will work before we replace it in `libquava/not
 
 2. Current linux UI implementation uses Polling in many cases, it's better to modify daemon to be able to push events through the socket to update daemon state. But I'm too fried to do that right now (we love GTK)
 
+3. Media implementation right now forces Pipeire + WirePlumber which is not a universal audio setup. `libquava/session/system_audio.go` will require appropriate changes to support other audio backend setups.
+
+4. Media implemmentation is very unoptimized, instead of polling it should be a Host SSE type listener. Host should modify payload and only send required bytes to save both power, cpu time and consume less memory. 
+
 ## Feature list
 - [x] Ping 
 - [x] Ring
