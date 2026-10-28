@@ -54,3 +54,20 @@ Notes:
 Need to see how the alternatives will work before we replace it in `libquava/notifications/android.go:promptAndReply`
 
 2. Current linux UI implementation uses Polling in many cases, it's better to modify daemon to be able to push events through the socket to update daemon state. But I'm too fried to do that right now (we love GTK)
+
+## Feature list
+- [x] Ping 
+- [x] Ring
+- [ ] Unpair
+- [x] Clipboard Sync (A->L)
+- [x] Notification Sync
+- [x] Remote Input (A->L)
+- [ ] Multimedia Controls
+- [ ] Pre-saved command running
+- [ ] SFTP/SMB
+- [ ] SSH
+- [ ] Exit Node/VPN
+- [ ] Screenshare/RDP
+- [ ] Password Manager(?)
+- [ ] 2FA code sync(?)
+- [ ] SMS Interaction
