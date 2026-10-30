@@ -307,7 +307,7 @@ func (d *Daemon) clipboardPush(req models.Request, enc *json.Encoder) {
 
 	content, err := clip.Read(ctx, clip.FmtText)
 	if err != nil {
-		enc.Encode(models.Response{Error: "failed to read clipboard content"})
+		_ = enc.Encode(models.Response{Error: "failed to read clipboard content"})
 		return
 	}
 

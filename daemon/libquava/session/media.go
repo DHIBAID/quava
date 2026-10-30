@@ -352,7 +352,12 @@ func mediaArtwork(rawURL string) ([]byte, error) {
 			return nil, requestErr
 		}
 
-		defer response.Body.Close()
+		defer func() {
+			if err := response.Body.Close(); err != nil {
+				log.Printf("failed to close artwork connection: %v", err)
+			}
+		}()
+
 		if response.StatusCode < 200 || response.StatusCode > 299 {
 			return nil, fmt.Errorf("artwork request returned %s", response.Status)
 		}
@@ -368,6 +373,7 @@ func mediaArtwork(rawURL string) ([]byte, error) {
 	}
 
 	// Compress the image
+	// TODO: There's no way recompressing this image every single poll is good. Look at project readme.
 	data, err = compressArtwork(data)
 	if err != nil {
 		return nil, err

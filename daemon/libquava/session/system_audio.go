@@ -171,10 +171,6 @@ func parseWPCTLProperty(output, key string) string {
 	return ""
 }
 
-func SetSystemVolume(volume float64) error {
-	return SetOutputDeviceVolume("", volume)
-}
-
 func SetOutputDeviceVolume(name string, volume float64) error {
 	if volume < 0 || volume > 1 {
 		return fmt.Errorf("system volume must be between 0.0 and 1.0")
@@ -187,10 +183,6 @@ func SetOutputDeviceVolume(name string, volume float64) error {
 
 	_, err = wpctl("set-volume", target, fmt.Sprintf("%.2f", volume))
 	return err
-}
-
-func SetSystemMuted(muted bool) error {
-	return SetOutputDeviceMuted("", muted)
 }
 
 func SetOutputDeviceMuted(name string, muted bool) error {

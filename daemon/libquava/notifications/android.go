@@ -70,7 +70,10 @@ func NewAndroidNotificationBridge(action func(context.Context, string, int, stri
 	}
 	b := &AndroidNotificationBridge{conn: conn, byLinux: make(map[uint32]androidNotification), byKey: make(map[string]uint32), replying: make(map[string]bool), action: action, dismiss: dismiss}
 	if err := conn.AddMatchSignal(dbus.WithMatchInterface("org.freedesktop.Notifications")); err != nil {
-		conn.Close()
+		if err := conn.Close(); err != nil {
+			return nil, err
+		}
+
 		return nil, err
 	}
 	signals := make(chan *dbus.Signal, 32)

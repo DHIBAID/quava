@@ -101,6 +101,7 @@ func main() {
 	} else {
 		d.clipboardReady = true
 	}
+
 	defer d.clipboard.StopClipboardService()
 
 	// Init notifications service
@@ -109,8 +110,13 @@ func main() {
 	if err != nil {
 		log.Printf("notifications: Android notification bridge failed: %v", err)
 	}
+
 	if d.androidNotifications != nil {
-		defer d.androidNotifications.Close()
+		defer func() {
+			if err := d.androidNotifications.Close(); err != nil {
+				log.Printf("failed to stop Android Notification service: %v", err)
+			}
+		}()
 	}
 
 	notifCtx, notifCancel := context.WithCancel(runCtx)
@@ -119,7 +125,12 @@ func main() {
 	if err := d.dbusNotifications.StartNotificationService(notifCtx); err != nil {
 		log.Printf("notificaions: failed to start: %v", err)
 	}
-	defer d.dbusNotifications.StopNotificationService()
+
+	defer func() {
+		if err := d.dbusNotifications.StopNotificationService(); err != nil {
+			log.Printf("failed to close D-Bus connection: %v", err)
+		}
+	}()
 
 	defer func() {
 		_ = listener.Close()
@@ -139,16 +150,20 @@ func main() {
 			if runCtx.Err() != nil || errors.Is(acceptErr, net.ErrClosed) {
 				break
 			}
+
 			log.Printf("ipc: accept failed: %v", acceptErr)
 			time.Sleep(100 * time.Millisecond)
+
 			continue
 		}
+
 		handlers.Add(1)
 		go func(conn net.Conn) {
 			defer handlers.Done()
 			d.handle(conn)
 		}(connection)
 	}
+
 	d.shutdown()
 	handlers.Wait()
 }
