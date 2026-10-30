@@ -1,9 +1,9 @@
-.PHONY: lint systemd clean-systemd update-systemd stop-systemd uinput
+.PHONY: lint systemd clean-systemd update-systemd stop-systemd uinput rm-uinput
 
 lint:
-	cd cli && go mod tidy && go vet ./... && golangci-lint run && staticcheck ./... && cd ..
-	cd libquava && go mod tidy && go vet ./... && golangci-lint run && staticcheck ./... && cd ..
-	cd quavad && go mod tidy && go vet ./... && golangci-lint run && staticcheck ./... && cd ..
+	cd cli && go mod tidy && go vet ./... && go fmt ./... && golangci-lint run && staticcheck ./... && cd ..
+	cd libquava && go mod tidy && go vet ./... && go fmt ./... && golangci-lint run && staticcheck ./... && cd ..
+	cd quavad && go mod tidy && go vet ./... && go fmt ./... && golangci-lint run && staticcheck ./... && cd ..
 
 # Install a per-user, socket-activated quavad. The socket starts quavad the
 # first time the CLI connects, and the daemon then keeps running normally.
@@ -26,6 +26,7 @@ systemd: uinput
 	@echo "Quava installed to systemd."
 
 
+# 	uinput permissions configuration
 uinput:
 	sudo groupadd -f quava-input
 	sudo usermod -aG quava-input "$${USER}"
@@ -34,18 +35,28 @@ uinput:
 	sudo udevadm trigger --name-match=uinput
 	@echo "uinput permissions configured. Log out and back in for group membership to take effect."
 
+# 	Remove uinput permissions configuration
+rm-uinput:
+	sudo gpasswd -d "$(USER)" quava-input
+	sudo rm -f /etc/udev/rules.d/99-quava-uinput.rules
+	sudo udevadm control --reload-rules
+	sudo udevadm trigger --name-match=uinput
+	sudo groupdel quava-input
+
+
 # Update the systemd binaries and restart the services to update quava, quavad, and the socket. 
 update-systemd:
 	go build -o "$(HOME)/.local/bin/quavad" ./quavad
 	go build -o "$(HOME)/.local/bin/quava" ./cli
 	systemctl --user daemon-reload
-	-systemctl --user restart quavad.service
+	systemctl --user restart quavad.service
 	systemctl --user restart quavad.socket
 
 	@echo "Quava updated in systemd."
 
 # Full purge of Quava from systemd, including the binary, config, and systemd unit files.
-clean-systemd:
+clean-systemd: rm-uinput
+	# Stop and remove systemd services
 	systemctl --user disable --now quavad.socket
 	rm -f "$(HOME)/.config/systemd/user/quavad.service" "$(HOME)/.config/systemd/user/quavad.socket"
 	rm -f "$(HOME)/.local/bin/quavad"
@@ -53,8 +64,8 @@ clean-systemd:
 	rm -rf "$(HOME)/.config/quava"
 	systemctl --user daemon-reload
 
-	@echo "Quava uninstalled from systemd."
 
+	@echo "Quava uninstalled from systemd."
 # Stop the systemd service, I use KDE-Connect (until Quava is mature enough)
 stop-systemd:
 	systemctl --user stop quavad.service

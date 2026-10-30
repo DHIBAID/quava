@@ -38,6 +38,7 @@ func clipboard(args []string) error {
 
 		fmt.Printf("%s sent for %s\n", "clipboard-push", args[1])
 		return nil
+
 	case "start":
 		var res models.Response
 		utils.Call(models.Request{
