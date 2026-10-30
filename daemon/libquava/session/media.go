@@ -212,7 +212,7 @@ func (s *Session) handleMultimediaCommand(ctx context.Context, msg protocol.Mess
 			if !ok {
 				commandErr = fmt.Errorf("missing or invalid system volume")
 			} else {
-				commandErr = SetOutputDeviceVolume(deviceName, value)
+				commandErr = media.SetOutputDeviceVolume(deviceName, value)
 			}
 
 		case "system-mute", "system-audio-mute":
@@ -220,11 +220,11 @@ func (s *Session) handleMultimediaCommand(ctx context.Context, msg protocol.Mess
 			if !ok {
 				commandErr = fmt.Errorf("missing or invalid mute value")
 			} else {
-				commandErr = SetOutputDeviceMuted(deviceName, value)
+				commandErr = media.SetOutputDeviceMuted(deviceName, value)
 			}
 
 		case "system-audio-default":
-			commandErr = SetDefaultOutputDevice(deviceName)
+			commandErr = media.SetDefaultOutputDevice(deviceName)
 		}
 
 		return s.ackMultimedia(ctx, msg, commandErr)
@@ -298,7 +298,7 @@ func (s *Session) ackMultimedia(ctx context.Context, msg protocol.Message, comma
 	}
 
 	// Audio state is independent of whether a media player is active.
-	if audio, err := SystemAudioState(); err == nil {
+	if audio, err := media.SystemAudioState(); err == nil {
 		payload[30] = audio.Volume
 		payload[31] = audio.Muted
 		payload[32] = audio.OutputDevice
