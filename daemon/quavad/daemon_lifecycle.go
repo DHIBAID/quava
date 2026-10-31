@@ -41,26 +41,34 @@ func (d *Daemon) shutdown() {
 }
 
 func (d *Daemon) connect(req models.Request, enc *json.Encoder) {
-	d.mu.Lock()
-	peer, ok := d.store.Device(req.PeerDeviceID)
+	if err := d.startSession(req.PeerDeviceID); err != nil {
+		_ = enc.Encode(models.Response{Error: err.Error()})
+		return
+	}
 
+	_ = enc.Encode(models.Response{})
+}
+
+// startSession begins keeping a session with a paired peer alive. It is a no-op
+// when one is already running. The session retries on its own until the peer
+// is reachable, so this can be called for phones that are not on the network.
+func (d *Daemon) startSession(peerID string) error {
+	d.mu.Lock()
+	peer, ok := d.store.Device(peerID)
 	if !ok {
 		d.mu.Unlock()
-		_ = enc.Encode(models.Response{Error: "peer device is not paired"})
-		return
+		return errors.New("peer device is not paired")
 	}
 
 	identity, ok := d.store.Identity()
 	if !ok {
 		d.mu.Unlock()
-		_ = enc.Encode(models.Response{Error: "local identity not found"})
-		return
+		return errors.New("local identity not found")
 	}
 
 	if _, exists := d.sessions[peer.PeerDeviceID]; exists {
 		d.mu.Unlock()
-		_ = enc.Encode(models.Response{})
-		return
+		return nil
 	}
 	ctx, cancel := context.WithCancel(d.ctx)
 	d.sessions[peer.PeerDeviceID] = &models.ManagedSession{Cancel: cancel}
@@ -68,6 +76,45 @@ func (d *Daemon) connect(req models.Request, enc *json.Encoder) {
 
 	go d.runSession(ctx, identity, peer)
 
+	return nil
+}
+
+// startAutoConnect connects to every paired device that has automatic
+// connecting on, which is the default.
+func (d *Daemon) startAutoConnect() {
+	d.mu.Lock()
+	var ids []string
+	for _, device := range d.store.Devices() {
+		if d.store.AutoConnect(device.PeerDeviceID) {
+			ids = append(ids, device.PeerDeviceID)
+		}
+	}
+	d.mu.Unlock()
+
+	for _, id := range ids {
+		if err := d.startSession(id); err != nil {
+			log.Printf("auto-connect %s: %v", id, err)
+		}
+	}
+}
+
+// setAutoConnect changes the saved preference. Turning it on also starts a
+// session; turning it off leaves any current session alone.
+func (d *Daemon) setAutoConnect(req models.Request, enc *json.Encoder, enabled bool) {
+	d.mu.Lock()
+	err := d.store.SetAutoConnect(req.PeerDeviceID, enabled)
+	if err == nil {
+		err = d.store.Save()
+	}
+	d.mu.Unlock()
+
+	if err == nil && enabled {
+		err = d.startSession(req.PeerDeviceID)
+	}
+	if err != nil {
+		_ = enc.Encode(models.Response{Error: err.Error()})
+		return
+	}
 	_ = enc.Encode(models.Response{})
 }
 
@@ -92,23 +139,42 @@ func (d *Daemon) disconnect(req models.Request, enc *json.Encoder) {
 }
 
 func (d *Daemon) runSession(ctx context.Context, identity lq.IdentityFile, peer lq.PairResult) {
-	client, err := discovery.NewClient()
+	// The shared watcher listens for the phone to announce itself. Sessions
+	// that cannot use it (no multicast-capable network at startup) fall back
+	// to a private client.
+	var client *discovery.Client
+	if d.watcher == nil {
+		var err error
+		client, err = discovery.NewClient()
+		if err != nil {
+			d.clearSession(peer.PeerDeviceID)
+			return
+		}
 
-	if err != nil {
-		d.clearSession(peer.PeerDeviceID)
-		return
+		defer func() { _ = client.Close() }()
 	}
 
-	defer func() { _ = client.Close() }()
-
 	if err := session.RunWithCallbacks(ctx, identity, peer, func(dialCtx context.Context) (*protocol.Conn, error) {
-		device, err := client.Find(dialCtx, peer.PeerDeviceID)
+		var device discovery.Device
+		var err error
+		if d.watcher != nil {
+			// Waits quietly until the phone is heard; asks only occasionally.
+			device, err = d.watcher.Find(dialCtx, peer.PeerDeviceID)
+		} else {
+			findCtx, cancelFind := context.WithTimeout(dialCtx, 8*time.Second)
+			device, err = client.Find(findCtx, peer.PeerDeviceID)
+			cancelFind()
+		}
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("find %s: %w", peer.PeerDeviceID, err)
 		}
 
 		connection, err := device.Connect(dialCtx)
 		if err != nil {
+			// The address may be stale (new IP, phone gone); wait for a fresh announcement.
+			if d.watcher != nil {
+				d.watcher.Forget(peer.PeerDeviceID)
+			}
 			return nil, err
 		}
 
@@ -133,12 +199,18 @@ func (d *Daemon) runSession(ctx context.Context, identity lq.IdentityFile, peer 
 			if content.ContentType != lq.Text {
 				return fmt.Errorf("unsupported clipboard content type %q", content.ContentType)
 			}
-			if len(content.Content) > 48*1024 {
+			if len(content.Content) > protocol.MaxClipboardBytes {
 				return errors.New("clipboard payload exceeds 48 KiB sync limit")
 			}
 			d.clipboard.RememberContent(content)
 			_, writeErr := clip.Write(clipboardCtx, clip.FmtText, content.Content)
 			return writeErr
+		})
+		active.SetUnpairHandler(func() {
+			log.Printf("session: %s asked to be unpaired", peer.PeerDeviceID)
+			if err := d.forgetDevice(peer.PeerDeviceID); err != nil {
+				log.Printf("session: unpair %s: %v", peer.PeerDeviceID, err)
+			}
 		})
 		active.SetAndroidNotificationHandler(func(ctx context.Context, notification lq.AndroidNotificationContent) error {
 			if d.androidNotifications == nil || !d.notificationSyncsToHost(peer.PeerDeviceID) {
@@ -151,8 +223,17 @@ func (d *Daemon) runSession(ctx context.Context, identity lq.IdentityFile, peer 
 		if managed := d.sessions[peer.PeerDeviceID]; managed != nil {
 			managed.Active = active
 		}
+		// A phone the user chose to always allow gets remote input back on its
+		// own, unless another device currently owns it.
+		if d.store.InputAuto(peer.PeerDeviceID) && (d.inputOwner == "" || d.inputOwner == peer.PeerDeviceID) {
+			d.inputOwner = peer.PeerDeviceID
+			d.inputEnabled[peer.PeerDeviceID] = true
+		}
 		d.mu.Unlock()
-	}, func(error) {
+	}, func(cause error) {
+		if cause != nil && !errors.Is(cause, context.Canceled) {
+			log.Printf("session: %s unavailable, will retry: %v", peer.PeerDeviceID, cause)
+		}
 		d.mu.Lock()
 		if managed := d.sessions[peer.PeerDeviceID]; managed != nil {
 			managed.Active = nil
@@ -265,6 +346,91 @@ func (d *Daemon) setInputEnabled(req models.Request, enc *json.Encoder, enabled 
 			_ = enc.Encode(models.Response{Error: err.Error()})
 			return
 		}
+	}
+	_ = enc.Encode(models.Response{})
+}
+
+// setInputAuto remembers (or forgets) that a paired phone may use remote input
+// every time it connects. Turning it on also enables input right away when the
+// phone is already connected.
+func (d *Daemon) setInputAuto(req models.Request, enc *json.Encoder, enabled bool) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	if err := d.store.SetInputAuto(req.PeerDeviceID, enabled); err != nil {
+		_ = enc.Encode(models.Response{Error: err.Error()})
+		return
+	}
+	if err := d.store.Save(); err != nil {
+		_ = enc.Encode(models.Response{Error: err.Error()})
+		return
+	}
+
+	if enabled {
+		managed := d.sessions[req.PeerDeviceID]
+		if managed != nil && managed.Active != nil && (d.inputOwner == "" || d.inputOwner == req.PeerDeviceID) {
+			d.inputOwner = req.PeerDeviceID
+			d.inputEnabled[req.PeerDeviceID] = true
+		}
+	}
+	_ = enc.Encode(models.Response{})
+}
+
+// forgetDevice ends any session with the device, then removes its trust record
+// and settings from the config.
+func (d *Daemon) forgetDevice(id string) error {
+	d.mu.Lock()
+	managed := d.sessions[id]
+	wasInputOwner := d.inputOwner == id
+	if wasInputOwner {
+		d.inputOwner = ""
+	}
+	delete(d.inputEnabled, id)
+
+	err := d.store.RemoveDevice(id)
+	if err == nil {
+		err = d.store.Save()
+	}
+	d.mu.Unlock()
+
+	if managed != nil && managed.Cancel != nil {
+		managed.Cancel()
+	}
+	if wasInputOwner {
+		if resetErr := d.resetRemoteInput(); resetErr != nil {
+			log.Printf("input: release state after unpair: %v", resetErr)
+		}
+	}
+	return err
+}
+
+// unpair asks a connected phone to forget this host (best effort), then forgets
+// the phone locally.
+func (d *Daemon) unpair(req models.Request, enc *json.Encoder) {
+	d.mu.Lock()
+	_, paired := d.store.Device(req.PeerDeviceID)
+	var active *session.Session
+	if managed := d.sessions[req.PeerDeviceID]; managed != nil {
+		active = managed.Active
+	}
+	d.mu.Unlock()
+
+	if !paired {
+		_ = enc.Encode(models.Response{Error: "peer device is not paired"})
+		return
+	}
+
+	if active != nil {
+		ctx, cancel := context.WithTimeout(d.ctx, 3*time.Second)
+		if err := active.Unpair(ctx); err != nil {
+			log.Printf("unpair: %s did not acknowledge: %v", req.PeerDeviceID, err)
+		}
+		cancel()
+	}
+
+	if err := d.forgetDevice(req.PeerDeviceID); err != nil {
+		_ = enc.Encode(models.Response{Error: err.Error()})
+		return
 	}
 	_ = enc.Encode(models.Response{})
 }

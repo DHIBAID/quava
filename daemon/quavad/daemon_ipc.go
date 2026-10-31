@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"strings"
 	"time"
@@ -16,6 +17,7 @@ import (
 	"libquava/discovery"
 	lq "libquava/models"
 	"libquava/pairing"
+	"libquava/protocol"
 	"libquava/session"
 	"quavad/models"
 	"quavad/utils"
@@ -44,7 +46,8 @@ func (d *Daemon) handle(connection net.Conn) {
 	}
 
 	req.PeerDeviceID = strings.ToLower(strings.TrimSpace(req.PeerDeviceID))
-	if req.Command != "devices" && req.Command != "discover" && !strings.HasPrefix(req.Command, "media-") && req.PeerDeviceID == "" {
+	if req.Command != "devices" && req.Command != "discover" && !strings.HasPrefix(req.Command, "media-") &&
+		!strings.HasPrefix(req.Command, "audio-") && !strings.HasPrefix(req.Command, "notif-filters-") && req.PeerDeviceID == "" {
 		_ = encoder.Encode(models.Response{Error: "peer_device_id is required"})
 		return
 	}
@@ -65,8 +68,23 @@ func (d *Daemon) handle(connection net.Conn) {
 	case "media-set-active":
 		d.mediaSetActive(req, encoder)
 
-	case "media-play-pause", "media-next", "media-previous", "media-play", "media-pause", "media-stop", "media-seek", "media-shuffle", "media-loop", "media-volume":
+	case "media-play-pause", "media-next", "media-previous", "media-play", "media-pause", "media-stop", "media-seek", "media-seek-to", "media-shuffle", "media-loop", "media-volume":
 		d.mediaControl(req, encoder)
+
+	case "media-auto":
+		d.mediaAuto(req, encoder)
+
+	case "audio-list":
+		d.audioList(req, encoder)
+
+	case "audio-volume", "audio-mute", "audio-default":
+		d.audioControl(req, encoder)
+
+	case "notif-filters-get":
+		d.notificationFiltersGet(req, encoder)
+
+	case "notif-filters-set":
+		d.notificationFiltersSet(req, encoder)
 
 	case "pair":
 		d.pair(req, decoder, encoder)
@@ -76,6 +94,15 @@ func (d *Daemon) handle(connection net.Conn) {
 
 	case "disconnect":
 		d.disconnect(req, encoder)
+
+	case "unpair":
+		d.unpair(req, encoder)
+
+	case "autoconnect-on":
+		d.setAutoConnect(req, encoder, true)
+
+	case "autoconnect-off":
+		d.setAutoConnect(req, encoder, false)
 
 	case "ping":
 		d.ping(req, encoder)
@@ -103,6 +130,12 @@ func (d *Daemon) handle(connection net.Conn) {
 
 	case "input-disable":
 		d.setInputEnabled(req, encoder, false)
+
+	case "input-auto-on":
+		d.setInputAuto(req, encoder, true)
+
+	case "input-auto-off":
+		d.setInputAuto(req, encoder, false)
 
 	case "notif-sync-both":
 		d.setNotificationSync(req, encoder, config.NotificationSyncBoth)
@@ -133,7 +166,27 @@ func (d *Daemon) devices(req models.Request, enc *json.Encoder) {
 	}
 
 	if req.PeerDeviceID == "" {
-		_ = enc.Encode(models.Response{Devices: d.store.Devices(), ConnectedDeviceIDs: connected})
+		devices := d.store.Devices()
+		settings := make(map[string]models.DeviceSettings, len(devices))
+		for _, device := range devices {
+			id := device.PeerDeviceID
+			settings[id] = models.DeviceSettings{
+				NotificationSync: string(d.store.NotificationSync(id)),
+				ClipboardSync:    d.store.ClipboardSync(id),
+				InputEnabled:     d.inputEnabled[id] && d.inputOwner == id,
+				InputAuto:        d.store.InputAuto(id),
+				AutoConnect:      d.store.AutoConnect(id),
+			}
+		}
+		status := make(map[string]lq.DeviceStatus)
+		for _, id := range connected {
+			if managed := d.sessions[id]; managed != nil && managed.Active != nil {
+				if reported, ok := managed.Active.DeviceStatus(); ok {
+					status[id] = reported
+				}
+			}
+		}
+		_ = enc.Encode(models.Response{Devices: devices, ConnectedDeviceIDs: connected, Settings: settings, Status: status})
 		return
 	}
 
@@ -217,6 +270,13 @@ func (d *Daemon) pair(req models.Request, dec *json.Decoder, enc *json.Encoder) 
 		d.mu.Lock()
 		d.store = refreshed
 		d.mu.Unlock()
+	}
+
+	// A newly paired phone should just work: connect now, and keep doing so.
+	if d.store.AutoConnect(result.PeerDeviceID) {
+		if err := d.startSession(result.PeerDeviceID); err != nil {
+			log.Printf("auto-connect after pairing: %v", err)
+		}
 	}
 
 	_ = enc.Encode(models.Response{Device: result})
@@ -311,7 +371,7 @@ func (d *Daemon) clipboardPush(req models.Request, enc *json.Encoder) {
 		return
 	}
 
-	if len(content) > 48*1024 {
+	if len(content) > protocol.MaxClipboardBytes {
 		_ = enc.Encode(models.Response{Error: "clipboard content exceeds 48 KiB sync limit"})
 		return
 	}
@@ -329,5 +389,4 @@ func (d *Daemon) clipboardPush(req models.Request, enc *json.Encoder) {
 	}
 
 	_ = enc.Encode(models.Response{})
-
 }

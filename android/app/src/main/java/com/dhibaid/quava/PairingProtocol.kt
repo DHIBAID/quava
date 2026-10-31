@@ -43,6 +43,23 @@ class PairingProtocol(private val appContext: Context) {
     /** Stable ID advertised over mDNS so desktop clients never need a display name. */
     fun localDeviceIdHex(): String = deviceId(identity.publicRaw).joinToString("") { "%02x".format(it) }
 
+    /** True when at least one host has been paired with this phone. */
+    fun hasTrustedPeer(): Boolean = IdentityStore(appContext, provider).peerIds().isNotEmpty()
+
+    /** Display name of the paired host, as last reported by it. */
+    fun trustedHostName(): String? =
+        IdentityStore(appContext, provider).let { store -> store.peerIds().firstNotNullOfOrNull { store.nameOf(it) } }
+
+    /** Remembers the name a paired host reports, so it can be shown while offline. */
+    internal fun rememberHostName(deviceId: ByteArray, name: String) =
+        IdentityStore(appContext, provider).saveName(deviceId, name)
+
+    /** Removes every trust record, so no host can open a session until paired again. */
+    fun forgetAllPeers() {
+        val store = IdentityStore(appContext, provider)
+        store.peerIds().forEach(store::forgetPeer)
+    }
+
     class BusyException : Exception()
 
     class Session internal constructor(
@@ -90,7 +107,9 @@ class PairingProtocol(private val appContext: Context) {
         val initiatorDeviceId = request.bytes(0, DEVICE_ID_BYTES)
         val initiatorPublicKey = request.bytes(1, ED25519_PUBLIC_KEY_BYTES)
         val initiatorNonce = request.bytes(2, NONCE_BYTES)
-        require(request.uints(3).contains(PROTOCOL_VERSION)) { "peer does not support protocol version 1" }
+        require(request.uints(3).contains(PROTOCOL_VERSION)) {
+            "peer does not support protocol version $PROTOCOL_VERSION; update Quava on both devices"
+        }
         require(initiatorDeviceId.contentEquals(deviceId(initiatorPublicKey))) { "initiator device ID does not match public key" }
         val peerName = request.string(4).ifBlank { socket.inetAddress.hostAddress }
 
@@ -190,7 +209,8 @@ class PairingProtocol(private val appContext: Context) {
         IdentityStore(appContext, provider).persistPeer(
             session.initiatorDeviceId,
             session.initiatorPublicKey,
-            peerCredential
+            peerCredential,
+            session.peerName,
         )
     }
 
@@ -254,8 +274,48 @@ class PairingProtocol(private val appContext: Context) {
                 )
             )
         )
+        // The peer is authenticated. Every frame from here on is encrypted in
+        // both directions, with a separate key per direction (the same
+        // derivation as the daemon's crypto.SessionKeys).
+        val salt = sha256(transcript)
+        val hostToPeer = hkdfSha256(salt, trusted.credential, SESSION_KEY_HOST_TO_PEER.encodeToByteArray(), FrameCipher.KEY_BYTES)
+        val peerToHost = hkdfSha256(salt, trusted.credential, SESSION_KEY_PEER_TO_HOST.encodeToByteArray(), FrameCipher.KEY_BYTES)
+        val sealedInput = DataInputStream(SealedInputStream(socket.getInputStream(), hostToPeer, MAX_FRAME_BYTES))
+        val sealedOutput = DataOutputStream(SealingOutputStream(socket.getOutputStream(), peerToHost, MAX_FRAME_BYTES))
+
         val peerName = socket.inetAddress.hostAddress ?: "Quava peer"
-        return RuntimeSession(socket, input, output, hello.transactionId, peerId, peerName)
+        return RuntimeSession(socket, sealedInput, sealedOutput, hello.transactionId, peerId, peerName)
+    }
+
+    /** Reports battery, signal and storage to the host. It needs no reply. */
+    internal fun sendDeviceStatus(session: RuntimeSession, status: DeviceStatus) {
+        writeMessage(
+            session.output,
+            Message(
+                DEVICE_STATUS, randomBytes(TRANSACTION_ID_BYTES), mapOf(
+                    0 to status.batteryPercent,
+                    1 to status.batteryState,
+                    2 to status.plug,
+                    3 to status.batteryTempC,
+                    4 to status.network,
+                    5 to status.wifiLevel,
+                    6 to status.wifiRssi,
+                    7 to status.cellGeneration,
+                    8 to status.cellLevel,
+                    9 to status.bluetooth,
+                    10 to status.airplane,
+                    11 to status.storageFree,
+                    12 to status.storageTotal,
+                    13 to status.model,
+                    14 to status.androidVersion,
+                )
+            )
+        )
+    }
+
+    /** Tells the host to forget this phone. Best effort: the caller forgets locally regardless. */
+    internal fun sendUnpair(session: RuntimeSession) {
+        writeMessage(session.output, Message(UNPAIR, randomBytes(TRANSACTION_ID_BYTES), emptyMap()))
     }
 
     internal fun sendNotificationClear(session: RuntimeSession, id: Int) {
@@ -285,7 +345,9 @@ class PairingProtocol(private val appContext: Context) {
                     3 to notification.title,
                     4 to notification.body,
                     5 to notification.icon,
-                    6 to actions
+                    6 to actions,
+                    7 to notification.category,
+                    8 to notification.silent
                 )
             )
         )
@@ -334,6 +396,7 @@ class PairingProtocol(private val appContext: Context) {
         onAndroidNotificationDismiss: suspend (Message) -> Unit,
         onMediaState: (Message) -> Unit,
         onMediaAck: (Message) -> Unit,
+        onUnpair: () -> Unit,
     ) {
         while (!session.socket.isClosed) {
             Log.d("Quava", "Waiting for session message...")
@@ -455,6 +518,18 @@ class PairingProtocol(private val appContext: Context) {
                     onMediaAck(message)
                 }
 
+                // The host forgot this phone: acknowledge, drop trust, end the session.
+                UNPAIR -> {
+                    writeMessage(
+                        session.output,
+                        Message(UNPAIR_ACK, message.transactionId, mapOf(0 to true))
+                    )
+                    onUnpair()
+                    return
+                }
+
+                UNPAIR_ACK -> Log.d("Quava", "Host acknowledged unpair")
+
                 MULTIMEDIA_STATE -> {
                     Log.d("Quava", "Received Multimedia State")
                     onMediaState(message)
@@ -491,7 +566,9 @@ class PairingProtocol(private val appContext: Context) {
         initiatorNonce: ByteArray,
         responderNonce: ByteArray
     ): ByteArray =
-        "quava-session".encodeToByteArray() + txId + initiatorId + responderId + initiatorPublic + responderPublic + initiatorNonce + responderNonce
+        "quava-session".encodeToByteArray() +
+            txId + initiatorId + responderId + initiatorPublic + responderPublic +
+            initiatorNonce + responderNonce
 
     private data class Identity(val privateKey: PrivateKey, val publicRaw: ByteArray)
 
@@ -520,14 +597,38 @@ class PairingProtocol(private val appContext: Context) {
 
         data class TrustedPeer(val publicKey: ByteArray, val credential: ByteArray)
 
-        fun persistPeer(deviceId: ByteArray, publicKey: ByteArray, credential: ByteArray) {
+        fun persistPeer(deviceId: ByteArray, publicKey: ByteArray, credential: ByteArray, name: String) {
             val id = Base64.encodeToString(deviceId, Base64.NO_WRAP)
             check(
                 prefs.edit()
                     .putString("peer-$id", Base64.encodeToString(publicKey, Base64.NO_WRAP))
                     .putString("peer-credential-$id", Base64.encodeToString(credential, Base64.NO_WRAP))
+                    .putString("peer-name-$id", name)
                     .commit()
             ) { "could not persist trusted peer" }
+        }
+
+        /** Base64 device IDs of every trusted peer. */
+        fun peerIds(): List<String> =
+            prefs.all.keys
+                .filter { it.startsWith("peer-credential-") }
+                .map { it.removePrefix("peer-credential-") }
+
+        fun saveName(deviceId: ByteArray, name: String) {
+            val id = Base64.encodeToString(deviceId, Base64.NO_WRAP)
+            if (prefs.contains("peer-$id")) prefs.edit().putString("peer-name-$id", name).apply()
+        }
+
+        fun nameOf(encodedId: String): String? = prefs.getString("peer-name-$encodedId", null)
+
+        fun forgetPeer(encodedId: String) {
+            check(
+                prefs.edit()
+                    .remove("peer-$encodedId")
+                    .remove("peer-credential-$encodedId")
+                    .remove("peer-name-$encodedId")
+                    .commit()
+            ) { "could not forget trusted peer" }
         }
 
         fun loadPeer(deviceId: ByteArray): TrustedPeer? {
@@ -609,15 +710,6 @@ class PairingProtocol(private val appContext: Context) {
         else -> AsInt64Value()
     }
 
-    // private fun CBORObject.toValue(): Any? = when (type) {
-    //     CBORType.ByteString -> GetByteString()
-    //     CBORType.TextString -> AsString()
-    //     CBORType.Boolean -> AsBoolean()
-    //     CBORType.Array -> values.map { it.AsInt64Value() }
-    //     CBORType.SimpleValue -> if (isNull) null else error("unsupported CBOR simple value")
-    //     else -> AsInt64Value()
-    // }
-
     private fun Message.bytes(key: Int, size: Int): ByteArray = (payload[key] as? ByteArray)?.also {
         require(it.size == size) { "field $key must be $size bytes" }
     } ?: error("field $key must be bytes")
@@ -646,7 +738,10 @@ class PairingProtocol(private val appContext: Context) {
         transactionId: ByteArray
     ): Int {
         val digest =
-            sha256("quava-pairing-code".encodeToByteArray() + initiatorPublic + responderPublic + initiatorNonce + responderNonce + transactionId)
+            sha256(
+                "quava-pairing-code".encodeToByteArray() +
+                    initiatorPublic + responderPublic + initiatorNonce + responderNonce + transactionId
+            )
         val number = ((digest[0].toLong() and 0xff) shl 24) or
                 ((digest[1].toLong() and 0xff) shl 16) or
                 ((digest[2].toLong() and 0xff) shl 8) or
@@ -674,7 +769,8 @@ class PairingProtocol(private val appContext: Context) {
             0,
             0,
             1
-        ) + transactionId + initiatorDeviceId + responderDeviceId + initiatorPublic + responderPublic + initiatorNonce + responderNonce + initiatorEphemeral + responderEphemeral
+        ) + transactionId + initiatorDeviceId + responderDeviceId + initiatorPublic + responderPublic +
+            initiatorNonce + responderNonce + initiatorEphemeral + responderEphemeral
 
     private fun sign(transcript: ByteArray): ByteArray = Signature.getInstance("Ed25519", provider).run {
         initSign(identity.privateKey)
@@ -726,7 +822,8 @@ class PairingProtocol(private val appContext: Context) {
     }
 
     companion object {
-        private const val PROTOCOL_VERSION = 1L
+        // Version 2 encrypts every session frame; version 1 peers are refused at the handshake.
+        private const val PROTOCOL_VERSION = 2L
         internal const val PAIR_REQUEST = 0x01L
         private const val PAIR_CHALLENGE = 0x02L
         private const val PAIR_AUTHENTICATE = 0x03L
@@ -752,10 +849,15 @@ class PairingProtocol(private val appContext: Context) {
         private const val DISMISS_ANDROID_NOTIFICATION_ACK = 0x2dL
         private const val INPUT_EVENT = 0x2eL
         private const val INPUT_EVENT_ACK = 0x2fL
+        private const val UNPAIR = 0x33L
+        private const val DEVICE_STATUS = 0x35L
+        private const val UNPAIR_ACK = 0x34L
         private const val MULTIMEDIA = 0x30L
         private const val MULTIMEDIA_ACK = 0x31L
         private const val MULTIMEDIA_STATE = 0x32L
         private const val PING_SILENT = 0
+        private const val SESSION_KEY_HOST_TO_PEER = "quava-session-frames-host-to-peer-v1"
+        private const val SESSION_KEY_PEER_TO_HOST = "quava-session-frames-peer-to-host-v1"
         private const val MAX_FRAME_BYTES = 64 * 1024
         private const val PAIRING_TIMEOUT_MS = 120_000
         private const val TRANSACTION_ID_BYTES = 16

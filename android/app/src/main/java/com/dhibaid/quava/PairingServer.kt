@@ -4,6 +4,11 @@ import android.content.Context
 import android.util.Log
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -30,6 +35,8 @@ class PairingServer(
     context: Context,
 ) {
     private val quavaService = context as? QuavaService
+    private val statusCollector = DeviceStatusCollector(context)
+    private var statusJob: Job? = null
     private val protocol = PairingProtocol(context.applicationContext)
     private val _state = MutableStateFlow(PairingState())
     val state: StateFlow<PairingState> = _state.asStateFlow()
@@ -37,6 +44,50 @@ class PairingServer(
     val mediaState: StateFlow<HostMediaState> = _mediaState.asStateFlow()
 
     fun localDeviceIdHex(): String = protocol.localDeviceIdHex()
+
+    init {
+        // Trust survives restarts, so show the paired host straight away.
+        if (protocol.hasTrustedPeer()) {
+            _state.value = _state.value.copy(
+                paired = true,
+                hostName = protocol.trustedHostName(),
+                status = "Paired. Waiting for the computer to connect",
+            )
+        }
+    }
+
+    /**
+     * Forgets the paired computer. If a session is open the computer is told
+     * first, so it forgets this phone too; trust is dropped locally either way.
+     */
+    fun unpair() {
+        val session = synchronized(lock) { activeSession }
+
+        scope.launch(Dispatchers.IO) {
+            try {
+                session?.let { protocol.sendUnpair(it) }
+            } catch (e: Exception) {
+                Log.w(TAG, "could not tell the host to unpair", e)
+            }
+
+            forgetHost("Unpaired. Ready to pair with a computer")
+        }
+    }
+
+    private fun forgetHost(status: String) {
+        protocol.forgetAllPeers()
+
+        val socket = synchronized(lock) {
+            activeSession?.close()
+            activeSession = null
+            activeSocket.also { activeSocket = null }
+        }
+        socket?.closeQuietly()
+
+        _mediaState.value = HostMediaState()
+        _state.value = PairingState(status = status)
+        quavaService?.onDisconnected()
+    }
 
     private var serverSocket: ServerSocket? = null
     private var activePairing: PairingProtocol.Session? = null
@@ -103,13 +154,15 @@ class PairingServer(
         } catch (e: Exception) {
             Log.e(TAG, "connection failed", e)
 
+            // After an unpair the socket closes on purpose; don't report that as a failure.
+            val stillPaired = protocol.hasTrustedPeer()
             update {
                 it.copy(
                     confirmationPending = false,
                     pairingCode = "",
                     pendingPeerName = "",
                     connected = false,
-                    status = "Connection failed: ${e.message ?: "connection closed"}"
+                    status = if (stillPaired) "Connection failed: ${e.message ?: "connection closed"}" else it.status
                 )
             }
 
@@ -148,6 +201,7 @@ class PairingServer(
                 pairingCode = "",
                 pendingPeerName = "",
                 connected = false,
+                hostName = session.peerName,
                 status = "Paired with ${session.peerName}"
             )
         }
@@ -174,6 +228,7 @@ class PairingServer(
                 session = session,
                 onReady = { hostName ->
                     peerName = hostName
+                    protocol.rememberHostName(session.peerDeviceId, hostName)
 
                     Log.d(
                         "QuavaSession",
@@ -190,6 +245,7 @@ class PairingServer(
 
                     quavaService?.onConnected(hostName)
                     sendMediaControl(MediaControl(MediaActions.STATE))
+                    startStatusReports(session)
                 },
                 onPing = { quavaService?.onPing(peerName) },
 
@@ -210,15 +266,53 @@ class PairingServer(
                 onAndroidNotificationDismiss = { message -> quavaService?.onAndroidNotificationDismiss(message) },
                 onMediaAck = ::handleMediaAck,
                 onMediaState = ::updateMediaState,
+                onUnpair = { forgetHost("The computer unpaired this phone") },
             )
         } finally {
             // A replacement connection may already be active when an older
             // session finishes. Do not let the old cleanup erase it.
+            statusJob?.cancel()
             synchronized(lock) {
                 if (activeSession === session) activeSession = null
             }
         }
 
+    }
+
+    /**
+     * Tells the computer how the phone is doing, now and then whenever
+     * something changes. Checking is local and cheap; a report is only sent
+     * when a reading differs from the last one sent.
+     */
+    private fun startStatusReports(session: PairingProtocol.RuntimeSession) {
+        statusJob?.cancel()
+        statusJob = scope.launch(Dispatchers.IO) {
+            val changed = Channel<Unit>(Channel.CONFLATED)
+            var last: DeviceStatus? = null
+
+            // The collector says when something moved; the timer is only a safety net.
+            statusCollector.start { changed.trySend(Unit) }
+            try {
+                while (isActive && !session.socket.isClosed) {
+                    val current = statusCollector.snapshot()
+                    if (current != last) {
+                        try {
+                            protocol.sendDeviceStatus(session, current)
+                            last = current
+                        } catch (e: Exception) {
+                            Log.w(TAG, "could not send device status", e)
+                            break
+                        }
+                    }
+
+                    withTimeoutOrNull(STATUS_INTERVAL_MS) { changed.receive() }
+                    // Changes arrive in bursts (a handover fires several callbacks); let them settle.
+                    delay(STATUS_SETTLE_MS)
+                }
+            } finally {
+                statusCollector.stop()
+            }
+        }
     }
 
     fun sendNotificationClear(id: Int) {
@@ -277,6 +371,10 @@ class PairingServer(
     }
 
 
+    // Icons arrive once per connection as separate messages; keep them by bus
+    // name so later full states can attach them. Bounded by installed players.
+    private val playerIcons = java.util.concurrent.ConcurrentHashMap<String, ByteArray>()
+
     private fun updateMediaState(message: PairingProtocol.Message) {
         val previous = _mediaState.value
         val updateType = (message.payload[MULTIMEDIA_UPDATE_TYPE] as? Number)?.toInt()
@@ -290,6 +388,17 @@ class PairingServer(
                 ) {
                     _mediaState.value = previous.copy(positionUs = positionUs)
                     quavaService?.updateHostMediaPosition(positionUs)
+                }
+                return
+            }
+            MULTIMEDIA_UPDATE_ICON -> {
+                val bus = message.payload[2] as? String ?: return
+                val icon = message.payload[4] as? ByteArray ?: return
+                playerIcons[bus] = icon
+                _mediaState.update { current ->
+                    current.copy(players = current.players.map {
+                        if (it.busName == bus) it.copy(icon = icon) else it
+                    })
                 }
                 return
             }
@@ -329,6 +438,21 @@ class PairingServer(
                 )
             } ?: previous.outputDevices
 
+        val players = (message.payload[40] as? List<*>)?.mapNotNull { item ->
+            val fields = item as? Map<*, *> ?: return@mapNotNull null
+            fun field(key: Int): Any? =
+                fields.entries.firstOrNull { (it.key as? Number)?.toInt() == key }?.value
+            val bus = field(0) as? String ?: return@mapNotNull null
+            HostMediaPlayer(
+                busName = bus,
+                identity = (field(1) as? String)?.ifBlank { null } ?: bus,
+                playbackStatus = field(2) as? String ?: "",
+                isActive = field(3) as? Boolean ?: false,
+                icon = playerIcons[bus],
+            )
+        } ?: emptyList()
+        val playerPinned = message.payload[41] as? Boolean ?: false
+
         val next = if (hasMediaState) {
             previous.copy(
                 available = true,
@@ -366,6 +490,8 @@ class PairingServer(
                     ?: previous.systemMuted,
                 outputDevice = text(32).ifBlank { previous.outputDevice },
                 outputDevices = devices,
+                players = players,
+                playerPinned = playerPinned,
             )
         } else {
             HostMediaState(
@@ -376,6 +502,8 @@ class PairingServer(
                     ?: previous.systemMuted,
                 outputDevice = text(32).ifBlank { previous.outputDevice },
                 outputDevices = devices,
+                players = players,
+                playerPinned = playerPinned,
             )
         }
 
@@ -400,6 +528,7 @@ class PairingServer(
 
     private fun mediaNotificationChanged(left: HostMediaState, right: HostMediaState): Boolean =
         left.available != right.available ||
+            left.playerId != right.playerId ||
             left.title != right.title ||
             left.artists != right.artists ||
             !sameArtwork(left.artwork, right.artwork) ||
@@ -452,8 +581,11 @@ class PairingServer(
 
     companion object {
         private const val TAG = "Quava"
+        private const val STATUS_INTERVAL_MS = 30_000L
+        private const val STATUS_SETTLE_MS = 800L
         private const val MULTIMEDIA_UPDATE_TYPE = 20
         private const val MULTIMEDIA_UPDATE_FULL = 0
         private const val MULTIMEDIA_UPDATE_POSITION = 1
+        private const val MULTIMEDIA_UPDATE_ICON = 2
     }
 }

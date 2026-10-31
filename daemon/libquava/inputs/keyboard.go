@@ -64,23 +64,6 @@ func New() (Emulator, error) {
 	}, nil
 }
 
-// DetectBackend is retained for compatibility with existing diagnostics.
-func DetectBackend(getenv func(string) string) (Backend, error) {
-	switch getenv("XDG_SESSION_TYPE") {
-	case "wayland":
-		return BackendWayland, nil
-	case "x11":
-		return BackendX11, nil
-	}
-	if getenv("WAYLAND_DISPLAY") != "" {
-		return BackendWayland, nil
-	}
-	if getenv("DISPLAY") != "" {
-		return BackendX11, nil
-	}
-	return "", errors.New("remote input: no Wayland or X11 session in environment")
-}
-
 func (e *emulator) Apply(ctx context.Context, input models.RemoteInput) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -221,13 +204,13 @@ func (e *emulator) releaseAllLocked() error {
 
 func (e *emulator) typeText(text string) error {
 	if len(text) == 0 || len(text) > 4096 {
-		return fmt.Errorf("remote input: text length out of range")
+		return errors.New("remote input: text length out of range")
 	}
 	// uinput sends physical key events, not Unicode strings. Map printable ASCII
 	// to keycodes and synthesize Shift for uppercase/shifted punctuation.
 	for _, r := range text {
 		if r < 0x20 || r > 0x7e {
-			return fmt.Errorf("remote input: raw uinput text supports printable ASCII only; Unicode needs a text/IME protocol")
+			return errors.New("remote input: raw uinput text supports printable ASCII only; Unicode needs a text/IME protocol")
 		}
 		code, shifted, ok := asciiKey(r)
 		if !ok {

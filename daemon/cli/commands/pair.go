@@ -3,104 +3,83 @@ package commands
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
-	"quava-cli/models"
-	"quava-cli/utils"
 	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
+
+	"quava-cli/models"
+	"quava-cli/utils"
 )
 
 var pairTimeout time.Duration
 
+// Pair pairs with a device found by discover.
 var Pair = &cobra.Command{
 	Use:   "pair <peer-device-id>",
-	Short: "Pair with a peer device.",
-	Long:  "Pair with a peer device by providing its device ID.",
-
-	Args: cobra.ExactArgs(1),
-
-	RunE: func(command *cobra.Command, args []string) error {
+	Short: "Pair with a device.",
+	Long:  "Pair with a device by its device ID. Both screens show a code; confirm only if they match.",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(_ *cobra.Command, args []string) error {
 		return pair(args[0], pairTimeout)
 	},
 }
 
 func init() {
-	Pair.Flags().DurationVarP(
-		&pairTimeout,
-		"timeout",
-		"t",
-		2*time.Minute,
-		"Pairing timeout",
-	)
+	Pair.Flags().DurationVarP(&pairTimeout, "timeout", "t", 2*time.Minute, "how long to wait for pairing")
 }
 
+// pair talks to the daemon over one connection: it asks, the daemon replies
+// with a code to verify, and we answer with the user's decision.
 func pair(peerDeviceID string, timeout time.Duration) error {
-	connection := utils.DaemonConnection()
-	defer func() {
-		if err := connection.Close(); err != nil {
-			fmt.Fprintf(os.Stderr, "Failed to close connection: %v\n", err)
-			os.Exit(1)
-		}
-	}()
+	connection, err := utils.Dial()
+	if err != nil {
+		return err
+	}
+	defer func() { _ = connection.Close() }()
 
 	encoder := json.NewEncoder(connection)
 	decoder := json.NewDecoder(connection)
 
-	if err := encoder.Encode(models.Request{
-		Command:      "pair",
-		PeerDeviceID: peerDeviceID,
-		TimeoutMS:    timeout.Milliseconds(),
-	}); err != nil {
-		return fmt.Errorf("failed to encode request: %w", err)
+	if err := encoder.Encode(models.Request{Command: "pair", PeerDeviceID: peerDeviceID, TimeoutMS: timeout.Milliseconds()}); err != nil {
+		return fmt.Errorf("send request: %w", err)
 	}
 
 	var res models.Response
-
 	if err := decoder.Decode(&res); err != nil {
-		return fmt.Errorf("failed to decode response: %w", err)
+		return fmt.Errorf("read reply: %w", err)
 	}
-
 	if res.Error != "" {
-		return fmt.Errorf("daemon returned error: %s", res.Error)
+		return errors.New(res.Error)
 	}
-
 	if res.Event != "pairing_code" {
-		return fmt.Errorf("daemon did not provide pairing code")
+		return errors.New("the daemon did not send a pairing code")
 	}
 
-	fmt.Printf(
-		"Pairing code for %s: %03d %03d\nConfirm pairing? [y/N]: ",
-		res.PeerName,
-		res.Code/1000,
-		res.Code%1000,
-	)
+	fmt.Printf("Pairing code for %s: %03d %03d\nConfirm pairing? [y/N]: ", res.PeerName, res.Code/1000, res.Code%1000)
 
 	line, err := bufio.NewReader(os.Stdin).ReadString('\n')
-	if err != nil && len(line) == 0 {
-		return fmt.Errorf("failed to read confirmation: %w", err)
+	if err != nil && line == "" {
+		return fmt.Errorf("read confirmation: %w", err)
 	}
 
-	accepted := strings.EqualFold(strings.TrimSpace(line), "y") ||
-		strings.EqualFold(strings.TrimSpace(line), "yes")
+	answer := strings.ToLower(strings.TrimSpace(line))
+	accepted := answer == "y" || answer == "yes"
 
-	if err := encoder.Encode(models.Request{
-		Command: "confirm_pairing",
-		Confirm: &accepted,
-	}); err != nil {
-		return fmt.Errorf("failed to encode confirmation: %w", err)
+	if err := encoder.Encode(models.Request{Command: "confirm_pairing", Confirm: &accepted}); err != nil {
+		return fmt.Errorf("send confirmation: %w", err)
 	}
 
+	res = models.Response{}
 	if err := decoder.Decode(&res); err != nil {
-		return fmt.Errorf("failed to decode confirmation response: %w", err)
+		return fmt.Errorf("read confirmation reply: %w", err)
 	}
-
 	if res.Error != "" {
-		return fmt.Errorf("daemon returned error: %s", res.Error)
+		return errors.New(res.Error)
 	}
 
-	utils.PrintReply(res)
-	return nil
+	return utils.PrintJSON(res.Device)
 }

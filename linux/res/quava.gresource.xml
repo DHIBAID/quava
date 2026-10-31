@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<gresources>
+  <gresource prefix="/io/quava/Desktop">
+    <file>app.css</file>
+    <file alias="icons/hicolor/192x192/apps/io.quava.Desktop.png">icon.png</file>
+  </gresource>
+</gresources>

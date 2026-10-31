@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"sync"
 	"time"
 
 	"github.com/fxamacker/cbor/v2"
@@ -39,6 +40,12 @@ type Framer struct {
 type Conn struct {
 	conn   net.Conn
 	framer Framer
+
+	// Set by EnableEncryption. Until then frames are plaintext, which is only
+	// acceptable for the handshake.
+	sendMu       sync.Mutex
+	send, recv   *frameCipher
+	sealedFramer Framer
 }
 
 // NewConn creates a framed Quava TCP connection wrapper.
@@ -62,12 +69,64 @@ func (c *Conn) Close() error {
 	return c.conn.Close()
 }
 
+// EnableEncryption switches the connection to sealed frames. Everything written
+// afterwards is encrypted with sendKey and everything read is decrypted with
+// recvKey. Call it once, after authentication, before any other goroutine uses
+// the connection.
+func (c *Conn) EnableEncryption(sendKey, recvKey []byte) error {
+	if c == nil || c.conn == nil {
+		return errors.New("protocol: nil connection")
+	}
+
+	send, err := newFrameCipher(sendKey)
+	if err != nil {
+		return err
+	}
+	recv, err := newFrameCipher(recvKey)
+	if err != nil {
+		return err
+	}
+
+	c.sendMu.Lock()
+	defer c.sendMu.Unlock()
+	if c.send != nil {
+		return errors.New("protocol: connection is already encrypted")
+	}
+	c.send, c.recv = send, recv
+	c.sealedFramer = NewFramer(DefaultMaxFrameSize + frameOverhead)
+
+	return nil
+}
+
 // WriteMessage writes a single framed CBOR message.
 func (c *Conn) WriteMessage(ctx context.Context, message Message) error {
 	if c == nil || c.conn == nil {
 		return errors.New("protocol: nil connection")
 	}
-	return c.framer.WriteMessage(ctx, c.conn, message)
+
+	payload, err := EncodeMessage(message)
+	if err != nil {
+		return fmt.Errorf("protocol: marshal message: %w", err)
+	}
+
+	// Sealing and writing happen under one lock so frames reach the wire in
+	// counter order, even when several goroutines send at once.
+	c.sendMu.Lock()
+	defer c.sendMu.Unlock()
+
+	if c.send == nil {
+		return c.framer.WriteFrame(ctx, c.conn, payload)
+	}
+
+	if uint32(len(payload)) > DefaultMaxFrameSize {
+		return fmt.Errorf("%w: %d > %d", ErrFrameTooLarge, len(payload), DefaultMaxFrameSize)
+	}
+	sealed, err := c.send.seal(payload)
+	if err != nil {
+		return err
+	}
+
+	return c.sealedFramer.WriteFrame(ctx, c.conn, sealed)
 }
 
 // ReadMessage reads a single framed CBOR message.
@@ -75,7 +134,21 @@ func (c *Conn) ReadMessage(ctx context.Context) (Message, error) {
 	if c == nil || c.conn == nil {
 		return Message{}, errors.New("protocol: nil connection")
 	}
-	return c.framer.ReadMessage(ctx, c.conn)
+
+	if c.recv == nil {
+		return c.framer.ReadMessage(ctx, c.conn)
+	}
+
+	sealed, err := c.sealedFramer.ReadFrame(ctx, c.conn)
+	if err != nil {
+		return Message{}, err
+	}
+	payload, err := c.recv.open(sealed)
+	if err != nil {
+		return Message{}, err
+	}
+
+	return DecodeMessage(payload)
 }
 
 // NewMessage constructs a protocol message.
@@ -101,28 +174,28 @@ func EncodeMessage(message Message) ([]byte, error) {
 func DecodeMessage(payload []byte) (Message, error) {
 	var encoded map[uint64]any
 	if err := cbor.Unmarshal(payload, &encoded); err != nil {
-		return Message{}, fmt.Errorf("%w: %v", ErrInvalidCBOR, err)
+		return Message{}, fmt.Errorf("%w: %w", ErrInvalidCBOR, err)
 	}
 
 	message := Message{Payload: map[uint64]any{}}
 	if rawVersion, ok := encoded[0]; ok {
 		version, err := uint64Value(rawVersion)
 		if err != nil {
-			return Message{}, fmt.Errorf("%w: version: %v", ErrInvalidMessage, err)
+			return Message{}, fmt.Errorf("%w: version: %w", ErrInvalidMessage, err)
 		}
 		message.Version = version
 	}
 	if rawType, ok := encoded[1]; ok {
 		typeValue, err := uint64Value(rawType)
 		if err != nil {
-			return Message{}, fmt.Errorf("%w: type: %v", ErrInvalidMessage, err)
+			return Message{}, fmt.Errorf("%w: type: %w", ErrInvalidMessage, err)
 		}
 		message.Type = typeValue
 	}
 	if rawTransactionID, ok := encoded[2]; ok {
 		transactionID, err := bytesValue(rawTransactionID)
 		if err != nil {
-			return Message{}, fmt.Errorf("%w: transaction_id: %v", ErrInvalidMessage, err)
+			return Message{}, fmt.Errorf("%w: transaction_id: %w", ErrInvalidMessage, err)
 		}
 		message.TransactionID = transactionID
 	}
@@ -133,7 +206,7 @@ func DecodeMessage(payload []byte) (Message, error) {
 			for key, value := range typed {
 				uintKey, err := uint64Value(key)
 				if err != nil {
-					return Message{}, fmt.Errorf("%w: payload key: %v", ErrInvalidMessage, err)
+					return Message{}, fmt.Errorf("%w: payload key: %w", ErrInvalidMessage, err)
 				}
 				message.Payload[uintKey] = value
 			}
@@ -273,7 +346,7 @@ func readExact(ctx context.Context, reader io.Reader, buf []byte) error {
 		if errors.Is(err, io.EOF) {
 			return io.ErrUnexpectedEOF
 		}
-		if ne, ok := err.(net.Error); ok && ne.Timeout() {
+		if ne := (net.Error)(nil); errors.As(err, &ne) && ne.Timeout() {
 			if err := ctx.Err(); err != nil {
 				return err
 			}
@@ -306,7 +379,7 @@ func writeExact(ctx context.Context, writer io.Writer, buf []byte) error {
 		if err == nil {
 			continue
 		}
-		if ne, ok := err.(net.Error); ok && ne.Timeout() {
+		if ne := (net.Error)(nil); errors.As(err, &ne) && ne.Timeout() {
 			if err := ctx.Err(); err != nil {
 				return err
 			}
@@ -339,19 +412,6 @@ func PayloadString(payload map[uint64]any, key uint64) (string, error) {
 	return stringValue, nil
 }
 
-// PayloadBool extracts a bool from a payload map.
-func PayloadBool(payload map[uint64]any, key uint64) (bool, error) {
-	value, ok := payload[key]
-	if !ok {
-		return false, fmt.Errorf("protocol: missing field %d", key)
-	}
-	boolean, ok := value.(bool)
-	if !ok {
-		return false, fmt.Errorf("protocol: field %d has unexpected type %T", key, value)
-	}
-	return boolean, nil
-}
-
 // PayloadUint extracts an unsigned integer from a payload map.
 func PayloadUint(payload map[uint64]any, key uint64) (uint64, error) {
 	value, ok := payload[key]
@@ -361,37 +421,13 @@ func PayloadUint(payload map[uint64]any, key uint64) (uint64, error) {
 	return uint64Value(value)
 }
 
-// PayloadUintSlice extracts an array of unsigned integers from a payload map.
-func PayloadUintSlice(payload map[uint64]any, key uint64) ([]uint64, error) {
-	value, ok := payload[key]
-	if !ok {
-		return nil, fmt.Errorf("protocol: missing field %d", key)
-	}
-	switch typed := value.(type) {
-	case []uint64:
-		return append([]uint64(nil), typed...), nil
-	case []any:
-		result := make([]uint64, 0, len(typed))
-		for _, item := range typed {
-			converted, err := uint64Value(item)
-			if err != nil {
-				return nil, fmt.Errorf("protocol: field %d contains invalid integer: %w", key, err)
-			}
-			result = append(result, converted)
-		}
-		return result, nil
-	default:
-		return nil, fmt.Errorf("protocol: field %d has unexpected type %T", key, value)
-	}
-}
-
 // ValidatePong checks that a pong response matches the request transaction ID.
 func ValidatePong(message Message, requestTransactionID []byte) error {
 	if message.Type != MessageTypePingAck {
 		return fmt.Errorf("%w: got %d", ErrUnexpectedType, message.Type)
 	}
 	if !bytes.Equal(message.TransactionID, requestTransactionID) {
-		return fmt.Errorf("%w", ErrUnexpectedID)
+		return ErrUnexpectedID
 	}
 	return nil
 }

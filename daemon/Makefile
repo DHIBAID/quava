@@ -4,6 +4,7 @@ lint:
 	cd cli && go mod tidy && go vet ./... && go fmt ./... && golangci-lint run && staticcheck ./... && cd ..
 	cd libquava && go mod tidy && go vet ./... && go fmt ./... && golangci-lint run && staticcheck ./... && cd ..
 	cd quavad && go mod tidy && go vet ./... && go fmt ./... && golangci-lint run && staticcheck ./... && cd ..
+	cd quavad && out="$$(deadcode ./... libquava/...)" && if [ -n "$$out" ]; then echo "$$out"; exit 1; fi
 
 # Install a per-user, socket-activated quavad. The socket starts quavad the
 # first time the CLI connects, and the daemon then keeps running normally.
@@ -13,7 +14,6 @@ systemd: uinput
 	go build -o "$(HOME)/.local/bin/quava" ./cli
 	install -m 0644 systemd/quavad.service "$(HOME)/.config/systemd/user/quavad.service"
 	install -m 0644 systemd/quavad.socket "$(HOME)/.config/systemd/user/quavad.socket"
-# 	systemctl --user import-environment DISPLAY WAYLAND_DISPLAY XDG_SESSION_TYPE XAUTHORITY DBUS_SESSION_BUS_ADDRESS
 	systemctl --user daemon-reload
 	systemctl --user enable --now quavad.socket
 	systemctl --user restart quavad.service

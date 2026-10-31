@@ -110,7 +110,7 @@ func Initiate(ctx context.Context, conn *protocol.Conn, options models.Initiator
 
 	computedVerificationCode := qcrypto.VerificationCode(identity.PublicKey, responderPublicKey, initiatorNonce, responderNonce, transactionID)
 	if uint64(computedVerificationCode) != verificationCode {
-		return nil, fmt.Errorf("pairing: verification code mismatch")
+		return nil, errors.New("pairing: verification code mismatch")
 	}
 
 	remoteName := options.RemoteDeviceName
@@ -295,7 +295,7 @@ func validateMessage(message protocol.Message, expectedType uint64, expectedTran
 	}
 
 	if !hmac.Equal(message.TransactionID, expectedTransactionID) {
-		return fmt.Errorf("%w", protocol.ErrUnexpectedID)
+		return protocol.ErrUnexpectedID
 	}
 
 	return nil

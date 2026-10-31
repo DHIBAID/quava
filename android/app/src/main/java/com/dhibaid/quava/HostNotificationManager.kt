@@ -19,10 +19,7 @@ data class HostNotification(
     val iconData: ByteArray? = null,
 )
 
-class HostNotificationManager(
-    private val context: Context,
-    private val onDismiss: ((Int) -> Unit)? = null,
-) {
+class HostNotificationManager(private val context: Context) {
     private val manager =
         context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
 

@@ -4,6 +4,7 @@ package inputs
 
 import (
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"os"
 	"syscall"
@@ -77,7 +78,7 @@ func newKeyboardDevice(path, name string) (*uinputDevice, error) {
 	}
 	for _, item := range keyMap {
 		if err := ioctl(d.file.Fd(), uiSetKeyBit, uintptr(item.evdev)); err != nil {
-			return fail(fmt.Errorf("enable key %d: %w", item.evdev, err))
+			return fail(fmt.Errorf("uinput: enable key %d: %w", item.evdev, err))
 		}
 	}
 	// Extra keys used by ASCII text and common modifier combinations.
@@ -122,7 +123,7 @@ func newMouseDevice(path, name string) (*uinputDevice, error) {
 func openUinput(path string) (*uinputDevice, error) {
 	f, err := os.OpenFile(path, os.O_WRONLY|syscall.O_CLOEXEC, 0)
 	if err != nil {
-		return nil, fmt.Errorf("open %s (check uinput permissions/module): %w", path, err)
+		return nil, fmt.Errorf("uinput: open %s (check permissions and that the module is loaded): %w", path, err)
 	}
 	return &uinputDevice{file: f}, nil
 }
@@ -134,10 +135,10 @@ func (d *uinputDevice) create(name string) error {
 	if err := ioctl(d.file.Fd(), uiDevSetup, uintptr(unsafe.Pointer(&setup))); err != nil {
 		// UI_DEV_SETUP is available on modern Linux. Do not silently fall back to
 		// the legacy struct because its ABI is different and error-prone.
-		return fmt.Errorf("UI_DEV_SETUP: %w", err)
+		return fmt.Errorf("uinput: UI_DEV_SETUP: %w", err)
 	}
 	if err := ioctl(d.file.Fd(), uiDevCreate, 0); err != nil {
-		return fmt.Errorf("UI_DEV_CREATE: %w", err)
+		return fmt.Errorf("uinput: UI_DEV_CREATE: %w", err)
 	}
 	return nil
 }
@@ -152,10 +153,10 @@ func (d *uinputDevice) event(typ uint16, code uint16, value int32) error {
 	binary.LittleEndian.PutUint32(buf[20:24], uint32(ev.Value))
 	n, err := d.file.Write(buf)
 	if err != nil {
-		return fmt.Errorf("write input event: %w", err)
+		return fmt.Errorf("uinput: write event: %w", err)
 	}
 	if n != len(buf) {
-		return fmt.Errorf("write input event: short write %d/%d", n, len(buf))
+		return fmt.Errorf("uinput: write event: short write %d/%d", n, len(buf))
 	}
 	return d.sync()
 }
@@ -167,10 +168,10 @@ func (d *uinputDevice) sync() error {
 	binary.LittleEndian.PutUint16(buf[18:20], ev.Code)
 	n, err := d.file.Write(buf)
 	if err != nil {
-		return fmt.Errorf("write SYN_REPORT: %w", err)
+		return fmt.Errorf("uinput: write SYN_REPORT: %w", err)
 	}
 	if n != len(buf) {
-		return fmt.Errorf("write SYN_REPORT: short write %d/%d", n, len(buf))
+		return fmt.Errorf("uinput: write SYN_REPORT: short write %d/%d", n, len(buf))
 	}
 	return nil
 }
@@ -180,7 +181,7 @@ func (d *uinputDevice) Close() error {
 		return nil
 	}
 	var errs []error
-	if err := ioctl(d.file.Fd(), uiDevDestroy, 0); err != nil && err != syscall.EINVAL {
+	if err := ioctl(d.file.Fd(), uiDevDestroy, 0); err != nil && !errors.Is(err, syscall.EINVAL) {
 		errs = append(errs, err)
 	}
 	if err := d.file.Close(); err != nil {
@@ -188,7 +189,7 @@ func (d *uinputDevice) Close() error {
 	}
 	d.file = nil
 	if len(errs) != 0 {
-		return fmt.Errorf("destroy uinput device: %v", errs)
+		return fmt.Errorf("uinput: destroy device: %w", errors.Join(errs...))
 	}
 	return nil
 }

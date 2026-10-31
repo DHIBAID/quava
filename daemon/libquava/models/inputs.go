@@ -1,6 +1,7 @@
 package models
 
 import (
+	"errors"
 	"fmt"
 	"math"
 	"unicode"
@@ -45,32 +46,32 @@ type RemoteInput struct {
 // reaches an input-emulation program.
 func (i RemoteInput) Validate() error {
 	if math.IsNaN(i.X) || math.IsNaN(i.Y) || math.IsInf(i.X, 0) || math.IsInf(i.Y, 0) || math.Abs(i.X) > 10000 || math.Abs(i.Y) > 10000 {
-		return fmt.Errorf("invalid input delta")
+		return errors.New("invalid input delta")
 	}
 	switch i.Type {
 	case InputKey:
 		if !supportedAndroidKey(i.KeyCode) || (i.Action != InputActionDown && i.Action != InputActionUp) {
-			return fmt.Errorf("unsupported or invalid key input")
+			return errors.New("unsupported or invalid key input")
 		}
 	case InputPointerMove:
 		if i.Action != InputActionNone || (i.X == 0 && i.Y == 0) {
-			return fmt.Errorf("invalid pointer move")
+			return errors.New("invalid pointer move")
 		}
 	case InputPointerButton:
 		if i.Button < 1 || i.Button > 5 || i.Action != InputActionDown && i.Action != InputActionUp {
-			return fmt.Errorf("invalid pointer button")
+			return errors.New("invalid pointer button")
 		}
 	case InputScroll:
 		if i.Action != InputActionNone || (i.X == 0 && i.Y == 0) {
-			return fmt.Errorf("invalid scroll")
+			return errors.New("invalid scroll")
 		}
 	case InputText:
 		if i.Action != InputActionNone || i.Text == "" || len(i.Text) > 4096 || !utf8.ValidString(i.Text) {
-			return fmt.Errorf("invalid text input")
+			return errors.New("invalid text input")
 		}
 		for _, r := range i.Text {
 			if unicode.IsControl(r) || r == '\u2028' || r == '\u2029' {
-				return fmt.Errorf("text input contains control characters")
+				return errors.New("text input contains control characters")
 			}
 		}
 	default:

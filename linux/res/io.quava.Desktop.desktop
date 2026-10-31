@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Quava
+Comment=Connect your Android phone to this computer
+Exec=quava-gui
+Icon=io.quava.Desktop
+Terminal=false
+Categories=Utility;Network;
+StartupWMClass=io.quava.Desktop
+

@@ -17,6 +17,10 @@ type Request struct {
 	Enabled      bool    `json:"enabled"`
 	LoopStatus   string  `json:"loop_status,omitempty"`
 	Volume       float64 `json:"volume,omitempty"`
+	PositionMS   int64   `json:"position_ms,omitempty"`
+	// Device names a system audio output; empty means the default output.
+	Device  string                      `json:"device,omitempty"`
+	Filters *models.NotificationFilters `json:"filters,omitempty"`
 }
 
 type Response struct {
@@ -29,4 +33,11 @@ type Response struct {
 	PeerName   string                    `json:"peer_name,omitempty"`
 	Players    []models.MPRISMediaPlayer `json:"players,omitempty"`
 	Player     *models.MPRISMediaPlayer  `json:"player,omitempty"`
+
+	ConnectedDeviceIDs []string                    `json:"connected_device_ids,omitempty"`
+	AudioDevices       []models.AudioOutputDevice  `json:"audio_devices,omitempty"`
+	Filters            *models.NotificationFilters `json:"filters,omitempty"`
 }
+
+// NotificationFilters is the host's Android-notification filter rules.
+type NotificationFilters = models.NotificationFilters

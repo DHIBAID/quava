@@ -20,14 +20,11 @@ import (
 	"github.com/godbus/dbus/v5"
 )
 
-// TODO: Allow supressing notifications based on types
-// TODO: Allow enabling/disabling notifications for specific Apps
-// TODO: Allow forwarding of notification types (slient notif is silent on host aswell)
-
 // AndroidNotificationBridge renders Android notifications locally and turns
 // D-Bus action/close signals back into Android operations.
 type AndroidNotificationBridge struct {
 	mu       sync.Mutex
+	filters  models.NotificationFilters
 	conn     *dbus.Conn
 	byLinux  map[uint32]androidNotification
 	byKey    map[string]uint32
@@ -104,7 +101,56 @@ func NewAndroidNotificationBridge(action func(context.Context, string, int, stri
 	return b, nil
 }
 
+// SetFilters installs the app/category/silent rules applied by Show.
+func (b *AndroidNotificationBridge) SetFilters(filters models.NotificationFilters) {
+	b.mu.Lock()
+	b.filters = filters
+	b.mu.Unlock()
+}
+
+func containsFold(list []string, value string) bool {
+	for _, item := range list {
+		if strings.EqualFold(strings.TrimSpace(item), strings.TrimSpace(value)) {
+			return true
+		}
+	}
+	return false
+}
+
+// shouldShow applies the filters; quiet reports a silent notification that
+// must be rendered without sound.
+func shouldShow(f models.NotificationFilters, n models.AndroidNotificationContent) (show, quiet bool) {
+	if containsFold(f.MutedApps, n.AppName) {
+		return false, false
+	}
+	if len(f.OnlyApps) > 0 && !containsFold(f.OnlyApps, n.AppName) {
+		return false, false
+	}
+	if n.Category != "" && containsFold(f.MutedCategories, n.Category) {
+		return false, false
+	}
+	if n.Silent {
+		switch strings.ToLower(strings.TrimSpace(f.Silent)) {
+		case "drop":
+			return false, false
+		case "normal":
+			return true, false
+		default: // "preserve" and unset: the phone already chose what to send
+			return true, true
+		}
+	}
+	return true, false
+}
+
 func (b *AndroidNotificationBridge) Show(_ context.Context, n models.AndroidNotificationContent) error {
+	b.mu.Lock()
+	filters := b.filters
+	b.mu.Unlock()
+	show, quiet := shouldShow(filters, n)
+	if !show {
+		log.Printf("notifications: filtered Android notification app=%q category=%q silent=%t", n.AppName, n.Category, n.Silent)
+		return nil
+	}
 	actions := make([]string, 0, len(n.Actions)*2)
 	for i, action := range n.Actions {
 		actions = append(actions, fmt.Sprintf("quava-action-%d", i), action.Title)
@@ -112,6 +158,12 @@ func (b *AndroidNotificationBridge) Show(_ context.Context, n models.AndroidNoti
 	hints := map[string]dbus.Variant{"x-quava-android": dbus.MakeVariant(true)}
 	if icon, ok := decodeIcon(n.IconData); ok {
 		hints["image-data"] = dbus.MakeVariant(icon)
+	}
+	if quiet {
+		// freedesktop urgency 0 (low) plus suppress-sound mirrors Android's
+		// silent presentation on the host.
+		hints["urgency"] = dbus.MakeVariant(byte(0))
+		hints["suppress-sound"] = dbus.MakeVariant(true)
 	}
 	if anyReplyAction(n.Actions) {
 		hints["x-kde-reply-placeholder-text"] = dbus.MakeVariant("Reply")

@@ -1,10 +1,12 @@
 package session
 
 import (
+	"bytes"
 	"context"
 	"crypto/ed25519"
 	"crypto/hmac"
 	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"log"
@@ -36,9 +38,14 @@ type Session struct {
 	readerOnce          sync.Once
 	multimediaOnce      sync.Once
 	multimediaWG        sync.WaitGroup
+	iconsMutex          sync.Mutex
+	iconsSent           map[string]struct{} // player bus names whose icon this connection already received
 	readDone            chan error
 	closeNotification   func(uint32) error
 	androidNotification func(context.Context, models.AndroidNotificationContent) error
+	unpairHandler       func()
+	statusMu            sync.Mutex
+	deviceStatus        *models.DeviceStatus
 	remoteInput         func(context.Context, models.RemoteInput) error
 	clipboardHandler    func(context.Context, models.ClipboardContent) error
 	inputQueue          chan inputJob
@@ -57,7 +64,7 @@ func Connect(ctx context.Context, conn *protocol.Conn, identity models.IdentityF
 	if len(peer.PeerPublicKey) != ed25519.PublicKeySize || len(peer.PeerCredential) == 0 {
 		return nil, errors.New("session: incomplete trust record")
 	}
-	if peer.PeerDeviceID != fmt.Sprintf("%x", crypto.DeviceIDBytes(ed25519.PublicKey(peer.PeerPublicKey))) {
+	if peer.PeerDeviceID != hex.EncodeToString(crypto.DeviceIDBytes(ed25519.PublicKey(peer.PeerPublicKey))) {
 		return nil, errors.New("session: trusted peer device ID does not match public key")
 	}
 
@@ -126,6 +133,16 @@ func Connect(ctx context.Context, conn *protocol.Conn, identity models.IdentityF
 		mac(peer.PeerCredential, "ready", transcript),
 	) {
 		return nil, errors.New("session: ready authentication failed")
+	}
+
+	// The peer is authenticated. From here on, every frame in both directions
+	// is encrypted; there is no plaintext fallback.
+	hostToPeer, peerToHost, err := crypto.SessionKeys(peer.PeerCredential, transcript)
+	if err != nil {
+		return nil, err
+	}
+	if err := conn.EnableEncryption(hostToPeer, peerToHost); err != nil {
+		return nil, err
 	}
 
 	hostname, err := os.Hostname()
@@ -366,7 +383,7 @@ func (s *Session) runEventWorker(ctx context.Context) {
 // connection reader cannot receive and discard a fast acknowledgement.
 func (s *Session) sendRequest(ctx context.Context, msg protocol.Message) (protocol.Message, error) {
 	transactionID := msg.TransactionID
-	txIDStr := fmt.Sprintf("%x", transactionID)
+	txIDStr := hex.EncodeToString(transactionID)
 	responseChan := make(chan protocol.Message, 1)
 
 	s.pendingMutex.Lock()
@@ -398,7 +415,7 @@ func (s *Session) sendRequest(ctx context.Context, msg protocol.Message) (protoc
 }
 
 func (s *Session) deliverResponse(msg protocol.Message) bool {
-	txIDStr := fmt.Sprintf("%x", msg.TransactionID)
+	txIDStr := hex.EncodeToString(msg.TransactionID)
 
 	s.pendingMutex.Lock()
 	responseChan, found := s.pending[txIDStr]
@@ -430,6 +447,10 @@ func (s *Session) handleUnsolicited(ctx context.Context, msg protocol.Message) {
 		if err := s.handleIncomingClipboard(ctx, msg); err != nil {
 			log.Printf("session: handle incoming clipboard failed: %v", err)
 		}
+	case protocol.MessageTypeDeviceStatus:
+		s.handleDeviceStatus(msg)
+	case protocol.MessageTypeUnpair:
+		s.handleUnpair(ctx, msg)
 	case protocol.MessageTypeMultimedia:
 		if err := s.handleMultimediaCommand(ctx, msg); err != nil {
 			log.Printf("session: handle multimedia command failed: %v", err)
@@ -465,6 +486,47 @@ func (s *Session) allowInputEvent(now time.Time) bool {
 // received from Android. It must be installed before the session is exposed.
 func (s *Session) SetAndroidNotificationHandler(handler func(context.Context, models.AndroidNotificationContent) error) {
 	s.androidNotification = handler
+}
+
+// SetUnpairHandler installs the callback run when the peer asks to be
+// unpaired. It must be installed before the session is exposed.
+func (s *Session) SetUnpairHandler(handler func()) {
+	s.unpairHandler = handler
+}
+
+// Unpair tells the peer to forget this host. The caller removes its own trust
+// record afterwards, whether or not the peer answered.
+func (s *Session) Unpair(ctx context.Context) error {
+	if s == nil || s.conn == nil {
+		return errors.New("session: closed")
+	}
+
+	tx, err := crypto.GenerateTransactionID()
+	if err != nil {
+		return err
+	}
+	response, err := s.sendRequest(ctx, protocol.NewMessage(protocol.MessageTypeUnpair, tx, map[uint64]any{}))
+	if err != nil {
+		return err
+	}
+	if response.Type != protocol.MessageTypeUnpairAck || !bytes.Equal(response.TransactionID, tx) {
+		return errors.New("session: invalid unpair acknowledgement")
+	}
+	return nil
+}
+
+func (s *Session) handleUnpair(ctx context.Context, msg protocol.Message) {
+	ack := protocol.NewMessage(protocol.MessageTypeUnpairAck, msg.TransactionID, map[uint64]any{0: true})
+	s.pingMutex.Lock()
+	err := s.conn.WriteMessage(ctx, ack)
+	s.pingMutex.Unlock()
+	if err != nil {
+		log.Printf("session: acknowledge unpair: %v", err)
+	}
+
+	if s.unpairHandler != nil {
+		s.unpairHandler()
+	}
 }
 
 func (s *Session) handleClearNotification(ctx context.Context, msg protocol.Message) error {

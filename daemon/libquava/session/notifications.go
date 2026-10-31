@@ -30,7 +30,9 @@ func (s *Session) handleAndroidNotification(ctx context.Context, msg protocol.Me
 	if value, ok := msg.Payload[5]; ok {
 		icon, _ = protocol.PayloadBytes(map[uint64]any{0: value}, 0)
 	}
-	content := models.AndroidNotificationContent{Key: key, AppName: appName, Title: title, Body: body, IconData: icon}
+	category, _ := msg.Payload[7].(string)
+	silent, _ := msg.Payload[8].(bool)
+	content := models.AndroidNotificationContent{Key: key, AppName: appName, Title: title, Body: body, IconData: icon, Category: category, Silent: silent}
 	if rawActions, ok := msg.Payload[6].([]any); ok {
 		for _, raw := range rawActions {
 			name, reply := androidNotificationAction(raw)
@@ -39,7 +41,7 @@ func (s *Session) handleAndroidNotification(ctx context.Context, msg protocol.Me
 			}
 		}
 	}
-	log.Printf("session: received Android notification key=%q app=%q actions=%d icon_bytes=%d", key, appName, len(content.Actions), len(icon))
+	log.Printf("session: received Android notification key=%q app=%q category=%q silent=%t actions=%d icon_bytes=%d", key, appName, category, silent, len(content.Actions), len(icon))
 	var callbackErr error
 	if s.androidNotification != nil {
 		callbackErr = s.androidNotification(ctx, content)

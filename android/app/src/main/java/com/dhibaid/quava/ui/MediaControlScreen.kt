@@ -4,6 +4,7 @@ import android.os.SystemClock
 import android.graphics.BitmapFactory
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -32,7 +33,6 @@ import kotlin.math.roundToLong
 import androidx.compose.foundation.basicMarquee
 import androidx.compose.foundation.MarqueeAnimationMode
 import androidx.compose.foundation.border
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -154,14 +154,7 @@ fun MediaControlScreen(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(14.dp),
         ) {
-            // The current model contains one player identity.
-            // Replace this with a player selector once the backend
-            // provides a collection of available players.
-            Text(
-                text = state.identity,
-                style = MaterialTheme.typography.labelLarge,
-                color = MaterialTheme.colorScheme.primary,
-            )
+            PlayerSelector(state = state, onSelect = { send(MediaControl(MediaActions.SELECT_PLAYER, busName = it)) })
 
             Box(
                 modifier = Modifier
@@ -403,8 +396,6 @@ private fun SystemAudioScreen(
 ) {
     val send: (MediaControl) -> Unit = { server.sendMediaControl(it) }
 
-    var showSystemAudio by remember { mutableStateOf(false) }
-
     LaunchedEffect(Unit) {
         send(MediaControl(MediaActions.SYSTEM_AUDIO_STATE))
     }
@@ -412,7 +403,7 @@ private fun SystemAudioScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Host media") },
+                title = { Text("Output devices") },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(
@@ -421,41 +412,40 @@ private fun SystemAudioScreen(
                         )
                     }
                 },
-                actions = {
-                    IconButton(onClick = { showSystemAudio = true }) {
-                        Icon(
-                            imageVector = Icons.Filled.VolumeUp,
-                            contentDescription = "System audio and output devices",
-                        )
-                    }
-                },
             )
         },
     ) { padding ->
+        if (state.outputDevices.isEmpty()) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(padding)
+                    .padding(24.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    text = "No output devices found. Check that the host audio service is running.",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    textAlign = TextAlign.Center,
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+            }
+            return@Scaffold
+        }
+
         Column(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
-                .padding(horizontal = 20.dp, vertical = 12.dp)
                 .verticalScroll(rememberScrollState()),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            Text(
-                text = "Manage the host computer's audio outputs.",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-
-            if (state.outputDevices.isEmpty()) {
-                Text(
-                    text = "No output devices found. Refresh the list and check that the host audio service is running.",
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    style = MaterialTheme.typography.bodyMedium,
-                )
+            // Default first; sortedBy is stable, so the host's order is kept otherwise.
+            val devices = remember(state.outputDevices) {
+                state.outputDevices.sortedBy { !it.isDefault }
             }
-
-            state.outputDevices.forEach { device ->
-                OutputDeviceCard(
+            devices.forEachIndexed { index, device ->
+                if (index > 0) HorizontalDivider()
+                OutputDeviceRow(
                     device = device,
                     onVolume = { newVolume ->
                         send(
@@ -489,8 +479,9 @@ private fun SystemAudioScreen(
     }
 }
 
+/** One device: tap the row to make it the default, slider for volume, icon to mute. */
 @Composable
-private fun OutputDeviceCard(
+private fun OutputDeviceRow(
     device: AudioOutputDevice,
     onVolume: (Double) -> Unit,
     onMute: (Boolean) -> Unit,
@@ -500,96 +491,132 @@ private fun OutputDeviceCard(
         mutableFloatStateOf(device.volume.toFloat().coerceIn(0f, 1f))
     }
 
-    Card(
-        modifier = Modifier.fillMaxWidth(),
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 8.dp, vertical = 4.dp),
     ) {
-        Column(
-            modifier = Modifier.padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable(enabled = !device.isDefault, onClick = onSetDefault),
+            verticalAlignment = Alignment.CenterVertically,
         ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
+            RadioButton(selected = device.isDefault, onClick = onSetDefault)
+            Text(
+                text = device.description,
+                style = MaterialTheme.typography.bodyLarge,
+                maxLines = 2,
+                modifier = Modifier.weight(1f),
+            )
+            IconButton(onClick = { onMute(!device.muted) }) {
                 Icon(
                     imageVector = if (device.muted) {
                         Icons.Filled.VolumeOff
                     } else {
-                        Icons.Filled.Speaker
+                        Icons.Filled.VolumeUp
                     },
-                    contentDescription = null,
-                    tint = if (device.isDefault) {
-                        MaterialTheme.colorScheme.primary
+                    contentDescription = if (device.muted) "Unmute" else "Mute",
+                    tint = if (device.muted) {
+                        MaterialTheme.colorScheme.error
                     } else {
-                        MaterialTheme.colorScheme.onSurfaceVariant
+                        MaterialTheme.colorScheme.onSurface
                     },
                 )
-
-                Spacer(Modifier.width(12.dp))
-
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        text = device.description,
-                        style = MaterialTheme.typography.titleMedium,
-                    )
-                    Text(
-                        text = if (device.isDefault) {
-                            "Default output"
-                        } else {
-                            "Available output"
-                        },
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-
-                if (device.isDefault) {
-                    Icon(
-                        Icons.Filled.CheckCircle,
-                        contentDescription = "Default device",
-                        tint = MaterialTheme.colorScheme.primary,
-                    )
-                }
             }
+        }
 
-            Text(
-                text = "Volume ${(volume * 100).toInt()}%",
-                style = MaterialTheme.typography.labelMedium,
-            )
-
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(start = 48.dp, end = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
             Slider(
                 value = volume,
                 onValueChange = { volume = it },
-                onValueChangeFinished = {
-                    onVolume(volume.toDouble())
-                },
+                onValueChangeFinished = { onVolume(volume.toDouble()) },
+                modifier = Modifier.weight(1f),
             )
+            Text(
+                text = "${(volume * 100).toInt()}%",
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = TextAlign.End,
+                modifier = Modifier.width(44.dp),
+            )
+        }
+    }
+}
 
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                TextButton(
-                    onClick = { onMute(!device.muted) },
-                ) {
-                    Icon(
-                        imageVector = if (device.muted) {
-                            Icons.Filled.VolumeUp
-                        } else {
-                            Icons.Filled.VolumeOff
-                        },
-                        contentDescription = null,
-                    )
-                    Spacer(Modifier.width(6.dp))
-                    Text(if (device.muted) "Unmute" else "Mute")
-                }
+/** The host's app icon, or a generic speaker when none was provided. */
+@Composable
+private fun PlayerIcon(icon: ByteArray?, modifier: Modifier) {
+    val bitmap = remember(icon) {
+        icon?.let { BitmapFactory.decodeByteArray(it, 0, it.size)?.asImageBitmap() }
+    }
+    if (bitmap != null) {
+        Image(bitmap = bitmap, contentDescription = null, modifier = modifier)
+    } else {
+        Icon(Icons.Filled.Speaker, contentDescription = null, modifier = modifier)
+    }
+}
 
-                if (!device.isDefault) {
-                    TextButton(onClick = onSetDefault) {
-                        Text("Set as default")
-                    }
-                }
+@Composable
+private fun PlayerSelector(state: HostMediaState, onSelect: (String) -> Unit) {
+    var expanded by remember { mutableStateOf(false) }
+    val label = state.identity.ifBlank { "Host media" }
+
+    Box {
+        OutlinedButton(
+            onClick = { expanded = true },
+            enabled = state.players.isNotEmpty(),
+        ) {
+            PlayerIcon(
+                state.players.firstOrNull { it.isActive }?.icon,
+                Modifier.size(20.dp),
+            )
+            Spacer(Modifier.width(8.dp))
+            Text(
+                if (state.players.size > 1) "$label (${state.players.size})" else label,
+                style = MaterialTheme.typography.labelLarge,
+            )
+            Spacer(Modifier.width(4.dp))
+            Icon(
+                Icons.Filled.ArrowDropDown,
+                contentDescription = "Choose player",
+            )
+        }
+        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            DropdownMenuItem(
+                text = { Text("Automatic") },
+                leadingIcon = {
+                    if (!state.playerPinned) Icon(Icons.Filled.Check, contentDescription = "Selected")
+                },
+                onClick = { expanded = false; onSelect("") },
+            )
+            state.players.forEach { player ->
+                DropdownMenuItem(
+                    text = {
+                        Column {
+                            Text(player.identity)
+                            if (player.playbackStatus.isNotBlank()) {
+                                Text(
+                                    player.playbackStatus,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                        }
+                    },
+                    leadingIcon = { PlayerIcon(player.icon, Modifier.size(28.dp)) },
+                    trailingIcon = {
+                        if (state.playerPinned && player.isActive) {
+                            Icon(Icons.Filled.Check, contentDescription = "Selected")
+                        }
+                    },
+                    onClick = { expanded = false; onSelect(player.busName) },
+                )
             }
         }
     }

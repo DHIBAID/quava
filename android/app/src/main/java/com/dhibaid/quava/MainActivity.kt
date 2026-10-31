@@ -80,6 +80,25 @@ class MainActivity : ComponentActivity() {
                     }
                 }
 
+                // Optional: lets the computer show whether the phone is on 4G or 5G.
+                val phoneStateLauncher = rememberLauncherForActivityResult(
+                    ActivityResultContracts.RequestPermission()
+                ) { }
+
+                LaunchedEffect(Unit) {
+                    val prefs = getSharedPreferences("quava-permissions", MODE_PRIVATE)
+                    if (
+                        !prefs.getBoolean("asked_phone_state", false) &&
+                        ContextCompat.checkSelfPermission(
+                            this@MainActivity,
+                            Manifest.permission.READ_PHONE_STATE
+                        ) != PackageManager.PERMISSION_GRANTED
+                    ) {
+                        prefs.edit().putBoolean("asked_phone_state", true).apply()
+                        phoneStateLauncher.launch(Manifest.permission.READ_PHONE_STATE)
+                    }
+                }
+
                 LaunchedEffect(Unit) {
                     if (
                         Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&

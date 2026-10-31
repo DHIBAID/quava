@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"container/list"
 	"context"
+	"errors"
 	"fmt"
 	"image"
 	"image/jpeg"
@@ -79,7 +80,7 @@ func mediaService() (*media.MPRISService, error) {
 	service := hostMedia.service
 	hostMedia.RUnlock()
 	if service == nil {
-		return nil, fmt.Errorf("MPRIS service is unavailable")
+		return nil, errors.New("mpris: service is unavailable")
 	}
 
 	return service, nil
@@ -111,7 +112,7 @@ func SetActiveMediaPlayer(busName string) (models.MPRISMediaPlayer, error) {
 
 	busName = strings.TrimSpace(busName)
 	if busName == "" {
-		return models.MPRISMediaPlayer{}, fmt.Errorf("bus_name is required")
+		return models.MPRISMediaPlayer{}, errors.New("media: bus name is required")
 	}
 
 	if err := service.SetActivePlayer(busName); err != nil {
@@ -119,6 +120,17 @@ func SetActiveMediaPlayer(busName string) (models.MPRISMediaPlayer, error) {
 	}
 
 	return service.GetPlayer(busName)
+}
+
+// UseAutomaticMediaPlayer clears a manual player selection so the active
+// player follows playback state again.
+func UseAutomaticMediaPlayer() error {
+	service, err := mediaService()
+	if err != nil {
+		return err
+	}
+	service.UseAutomaticPlayer()
+	return nil
 }
 
 // startMultimediaSync sends the session's initial state and relays subsequent
@@ -188,7 +200,8 @@ func (s *Session) sendMultimediaEvent(ctx context.Context, event media.MediaEven
 		// predate an active-player change and carry a stale IsActive flag.
 		active, err := ActiveMediaPlayer()
 		if event.State == nil || err != nil || active.BusName != event.PlayerID {
-			return nil
+			// No active player (or a different one) means there is no position to send.
+			return nil //nolint:nilerr
 		}
 		return s.sendMultimediaPosition(ctx, event.State.Position)
 	}
@@ -243,20 +256,20 @@ func ControlMedia(command MediaCommand) error {
 
 	case "media-loop":
 		if command.LoopStatus != "None" && command.LoopStatus != "Track" && command.LoopStatus != "Playlist" {
-			return fmt.Errorf("invalid loop status %q (use None, Track, or Playlist)", command.LoopStatus)
+			return fmt.Errorf("media: invalid loop status %q (use None, Track, or Playlist)", command.LoopStatus)
 		}
 
 		actionErr = service.SetLoopStatus(busName, command.LoopStatus)
 
 	case "media-volume":
 		if command.Volume < 0 || command.Volume > 1 {
-			return fmt.Errorf("volume must be between 0.0 and 1.0")
+			return errors.New("media: volume must be between 0.0 and 1.0")
 		}
 
 		actionErr = service.SetPlayerVolume(busName, command.Volume)
 
 	default:
-		return fmt.Errorf("unsupported media command %q", command.Command)
+		return fmt.Errorf("media: unsupported command %q", command.Command)
 	}
 
 	if actionErr != nil {
@@ -276,6 +289,24 @@ func (s *Session) handleMultimediaCommand(ctx context.Context, msg protocol.Mess
 	}
 
 	log.Printf("session: received multimedia command=%q", command)
+	if command == "select-player" {
+		busName, _ := msg.Payload[2].(string)
+		var selectErr error
+		if strings.TrimSpace(busName) == "" {
+			if service, err := mediaService(); err != nil {
+				selectErr = err
+			} else {
+				service.UseAutomaticPlayer()
+			}
+		} else {
+			_, selectErr = SetActiveMediaPlayer(busName)
+		}
+		if err := s.ackMultimedia(ctx, msg, selectErr); err != nil {
+			return err
+		}
+		return s.sendMultimediaState(ctx)
+	}
+
 	if command == "state" {
 		if err := s.ackMultimedia(ctx, msg, nil); err != nil {
 			return err
@@ -287,7 +318,6 @@ func (s *Session) handleMultimediaCommand(ctx context.Context, msg protocol.Mess
 		command == "system-volume" || command == "system-mute" ||
 		command == "system-audio-volume" || command == "system-audio-mute" ||
 		command == "system-audio-default" {
-
 		deviceName, _ := msg.Payload[2].(string)
 		var commandErr error
 
@@ -295,7 +325,7 @@ func (s *Session) handleMultimediaCommand(ctx context.Context, msg protocol.Mess
 		case "system-volume", "system-audio-volume":
 			value, ok := msg.Payload[6].(float64)
 			if !ok {
-				commandErr = fmt.Errorf("missing or invalid system volume")
+				commandErr = errors.New("audio: missing or invalid volume")
 			} else {
 				commandErr = media.SetOutputDeviceVolume(deviceName, value)
 			}
@@ -303,7 +333,7 @@ func (s *Session) handleMultimediaCommand(ctx context.Context, msg protocol.Mess
 		case "system-mute", "system-audio-mute":
 			value, ok := msg.Payload[4].(bool)
 			if !ok {
-				commandErr = fmt.Errorf("missing or invalid mute value")
+				commandErr = errors.New("audio: missing or invalid mute value")
 			} else {
 				commandErr = media.SetOutputDeviceMuted(deviceName, value)
 			}
@@ -352,6 +382,56 @@ func (s *Session) sendMultimediaState(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	if err := s.sendMultimediaStateFrame(ctx); err != nil {
+		return err
+	}
+	s.sendNewPlayerIcons(ctx)
+	return nil
+}
+
+// sendNewPlayerIcons sends each player's icon once per connection, as its
+// own small message. Failures only cost the icon, never the state.
+func (s *Session) sendNewPlayerIcons(ctx context.Context) {
+	service, err := mediaService()
+	if err != nil {
+		return
+	}
+	for _, player := range service.ListPlayers() {
+		s.iconsMutex.Lock()
+		if s.iconsSent == nil {
+			s.iconsSent = make(map[string]struct{})
+		}
+		_, done := s.iconsSent[player.BusName]
+		s.iconsSent[player.BusName] = struct{}{}
+		s.iconsMutex.Unlock()
+		if done {
+			continue
+		}
+
+		icon := media.AppIconPNG(player.DesktopEntry, player.Identity)
+		if len(icon) == 0 {
+			continue
+		}
+		transactionID, err := qcrypto.GenerateTransactionID()
+		if err != nil {
+			return
+		}
+		msg := protocol.NewMessage(protocol.MessageTypeMultimediaState, transactionID, map[uint64]any{
+			protocol.MultimediaStateUpdateType: protocol.MultimediaStateIcon,
+			2:                                  player.BusName,
+			4:                                  icon,
+		})
+		s.pingMutex.Lock()
+		err = s.conn.WriteMessage(ctx, msg)
+		s.pingMutex.Unlock()
+		if err != nil {
+			log.Printf("session: send player icon: %v", err)
+			return
+		}
+	}
+}
+
+func (s *Session) sendMultimediaStateFrame(ctx context.Context) error {
 	payload := map[uint64]any{
 		protocol.MultimediaStateUpdateType: protocol.MultimediaStateFull,
 	}
@@ -379,6 +459,23 @@ func (s *Session) sendMultimediaState(ctx context.Context) error {
 		if artwork, err := mediaArtwork(ctx, player.Metadata.ArtworkURL); err == nil {
 			payload[19] = artwork
 		}
+	}
+
+	// Available players, so the client can offer a selector. Sent even with
+	// no active player (empty list).
+	if service, err := mediaService(); err == nil {
+		players := service.ListPlayers()
+		list := make([]any, 0, len(players))
+		for _, p := range players {
+			list = append(list, map[uint64]any{
+				0: p.BusName,
+				1: p.Identity,
+				2: p.PlaybackStatus,
+				3: p.IsActive,
+			})
+		}
+		payload[40] = list
+		payload[41] = service.PinnedPlayer() != ""
 	}
 
 	// System audio state (independent of media player)
@@ -476,9 +573,16 @@ func (s *Session) ackMultimedia(ctx context.Context, msg protocol.Message, comma
 }
 
 func mediaArtwork(ctx context.Context, rawURL string) ([]byte, error) {
+	// State is resent on every player event; serve known artwork without
+	// re-reading the file or refetching the URL. Only already-compliant
+	// (<= 48 KiB) results are ever cached.
+	if cached, ok := compressedArtworkCache.Get(rawURL); ok {
+		return cached, nil
+	}
+
 	u, err := url.Parse(rawURL)
 	if err != nil {
-		return nil, fmt.Errorf("invalid artwork URL")
+		return nil, errors.New("artwork: invalid URL")
 	}
 
 	var data []byte
@@ -504,21 +608,21 @@ func mediaArtwork(ctx context.Context, rawURL string) ([]byte, error) {
 		}()
 
 		if response.StatusCode < 200 || response.StatusCode > 299 {
-			return nil, fmt.Errorf("artwork request returned %s", response.Status)
+			return nil, fmt.Errorf("artwork: request returned %s", response.Status)
 		}
 
 		data, err = io.ReadAll(io.LimitReader(response.Body, 512*1024+1))
 
 	default:
-		return nil, fmt.Errorf("unsupported artwork URL scheme")
+		return nil, errors.New("artwork: unsupported URL scheme")
 	}
 
 	if err != nil {
 		return nil, err
 	}
 
-	// Compress the image
-	// TODO: There's no way recompressing this image every single poll is good. Look at project readme.
+	// compressArtwork keeps a small LRU of results keyed by artwork URL, so
+	// repeated state sends do not decode or recompress the same image.
 	data, err = compressArtwork(rawURL, data)
 	if err != nil {
 		return nil, err
@@ -529,8 +633,8 @@ func mediaArtwork(ctx context.Context, rawURL string) ([]byte, error) {
 	// The session protocol caps an entire frame at 64 KiB. Leave room for
 	// metadata and CBOR overhead; Android can load an oversized HTTP(S) URL
 	// itself, while local file artwork simply falls back to the placeholder.
-	if len(data) > 48*1024 {
-		return nil, fmt.Errorf("artwork exceeds transfer limit")
+	if len(data) > protocol.MaxArtworkBytes {
+		return nil, errors.New("artwork: exceeds transfer limit")
 	}
 
 	return data, nil
@@ -598,7 +702,7 @@ var compressedArtworkCache = newArtworkLRU()
 func compressArtwork(cacheKey string, data []byte) ([]byte, error) {
 	const (
 		maxDimension = 512
-		maxSize      = 48 * 1024
+		maxSize      = protocol.MaxArtworkBytes
 		minDimension = 64
 	)
 
@@ -610,11 +714,11 @@ func compressArtwork(cacheKey string, data []byte) ([]byte, error) {
 	// Inspect dimensions before decoding the full image.
 	cfg, format, err := image.DecodeConfig(bytes.NewReader(data))
 	if err != nil {
-		return nil, fmt.Errorf("decode artwork config: %w", err)
+		return nil, fmt.Errorf("artwork: decode config: %w", err)
 	}
 
 	if cfg.Width <= 0 || cfg.Height <= 0 {
-		return nil, fmt.Errorf("invalid artwork dimensions")
+		return nil, errors.New("artwork: invalid dimensions")
 	}
 
 	// Fast path: already-compliant JPEG.
@@ -626,12 +730,12 @@ func compressArtwork(cacheKey string, data []byte) ([]byte, error) {
 	const maxPixels = 16_000_000
 
 	if int64(cfg.Width)*int64(cfg.Height) > maxPixels {
-		return nil, fmt.Errorf("artwork dimensions exceed pixel limit")
+		return nil, errors.New("artwork: dimensions exceed pixel limit")
 	}
 
 	img, _, err := image.Decode(bytes.NewReader(data))
 	if err != nil {
-		return nil, fmt.Errorf("decode artwork: %w", err)
+		return nil, fmt.Errorf("artwork: decode: %w", err)
 	}
 
 	bounds := img.Bounds()
@@ -659,7 +763,7 @@ func compressArtwork(cacheKey string, data []byte) ([]byte, error) {
 			if err := jpeg.Encode(&buf, img, &jpeg.Options{
 				Quality: quality,
 			}); err != nil {
-				return nil, fmt.Errorf("encode artwork: %w", err)
+				return nil, fmt.Errorf("artwork: encode: %w", err)
 			}
 
 			if buf.Len() <= maxSize {
@@ -673,7 +777,7 @@ func compressArtwork(cacheKey string, data []byte) ([]byte, error) {
 		width, height := bounds.Dx(), bounds.Dy()
 
 		if width <= minDimension && height <= minDimension {
-			return nil, fmt.Errorf("artwork cannot fit transfer limit")
+			return nil, errors.New("artwork: cannot fit transfer limit")
 		}
 
 		width = max(minDimension, width*3/4)
@@ -681,7 +785,10 @@ func compressArtwork(cacheKey string, data []byte) ([]byte, error) {
 
 		resized := image.NewRGBA(image.Rect(0, 0, width, height))
 
-		draw.CatmullRom.Scale(resized, resized.Bounds(), img, bounds, draw.Over, nil)
+		// Repeat shrinks are only 25% steps from an already-resized image, so
+		// the cheap ApproxBiLinear is enough. CatmullRom allocates a large
+		// temporary buffer per call (it dominated the heap/alloc profiles).
+		draw.ApproxBiLinear.Scale(resized, resized.Bounds(), img, bounds, draw.Src, nil)
 
 		img = resized
 	}

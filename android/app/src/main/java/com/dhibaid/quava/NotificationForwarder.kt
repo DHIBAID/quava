@@ -10,6 +10,7 @@ import android.graphics.drawable.Icon
 import android.os.Build
 import android.os.Bundle
 import android.service.notification.NotificationListenerService
+import android.service.notification.NotificationListenerService.Ranking
 import android.service.notification.StatusBarNotification
 import android.util.Log
 import java.io.ByteArrayOutputStream
@@ -45,12 +46,43 @@ class NotificationForwarder : NotificationListenerService() {
         }
     }
 
+    /** Records "package<TAB>label" once per app; bounded so it cannot grow without limit. */
+    private fun rememberApp(prefs: android.content.SharedPreferences, pkg: String) {
+        val seen = HashSet(prefs.getStringSet(NotificationSettings.SEEN_APPS, emptySet()).orEmpty())
+        if (seen.any { it.substringBefore('\t') == pkg } || seen.size >= 300) return
+
+        val label = try {
+            packageManager.getApplicationLabel(packageManager.getApplicationInfo(pkg, 0)).toString()
+        } catch (_: Exception) {
+            pkg
+        }
+        seen.add("$pkg\t$label")
+        prefs.edit().putStringSet(NotificationSettings.SEEN_APPS, seen).apply()
+    }
+
     private fun forward(sbn: StatusBarNotification) {
         // Never mirror Quava's own notifications.
         if (sbn.packageName == packageName) return
 
         val notification = sbn.notification
         val prefs = getSharedPreferences("quava-notification-settings", MODE_PRIVATE)
+
+        // Remember every app that posts, so the settings screen can list it
+        // (including muted ones, which must stay listed to be un-muted).
+        rememberApp(prefs, sbn.packageName)
+
+        if (sbn.packageName in prefs.getStringSet(NotificationSettings.MUTED_APPS, emptySet()).orEmpty()) {
+            Log.d(TAG, "Ignoring muted app ${sbn.packageName}")
+            return
+        }
+
+        val category = notification.category.orEmpty()
+        if (category.isNotEmpty() &&
+            category in prefs.getStringSet(NotificationSettings.MUTED_CATEGORIES, emptySet()).orEmpty()
+        ) {
+            Log.d(TAG, "Ignoring muted category $category from ${sbn.packageName}")
+            return
+        }
 
         if (
             prefs.getBoolean("disable_group_notifications", false) &&
@@ -70,10 +102,18 @@ class NotificationForwarder : NotificationListenerService() {
             return
         }
 
-        // Ignore notifications configured not to alert.
-        if (isSilent(sbn)) {
-            Log.d(TAG, "Ignoring silent notification from ${sbn.packageName}")
-            return
+        // Silent notifications follow the user's choice: drop (default), show
+        // quietly on the host, or show like any other notification.
+        var silent = isSilent(sbn)
+        if (silent) {
+            when (prefs.getString(NotificationSettings.SILENT_POLICY, NotificationSettings.SILENT_DROP)) {
+                NotificationSettings.SILENT_PRESERVE -> Unit
+                NotificationSettings.SILENT_NORMAL -> silent = false
+                else -> {
+                    Log.d(TAG, "Ignoring silent notification from ${sbn.packageName}")
+                    return
+                }
+            }
         }
 
         val extras = notification.extras
@@ -114,7 +154,9 @@ class NotificationForwarder : NotificationListenerService() {
                 title = title,
                 body = body,
                 icon = notificationArtwork(sbn),
-                actions = actions
+                actions = actions,
+                category = category,
+                silent = silent
             )
         )
     }
@@ -275,18 +317,20 @@ class NotificationForwarder : NotificationListenerService() {
      * This cannot reliably detect every notification silenced by
      * Do Not Disturb, device settings, or app-specific behavior.
      */
+    /**
+     * A notification is silent when the system ranks it below default
+     * importance (no sound or heads-up). Ranking data covers every app's
+     * notifications; NotificationManager.getNotificationChannel() only sees
+     * this app's own channels and returns null for everyone else's.
+     */
     private fun isSilent(sbn: StatusBarNotification): Boolean {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
-            return false
-        }
-
         return try {
-            val notification = sbn.notification
-            val manager = getSystemService(NotificationManager::class.java)
-            val channel = manager.getNotificationChannel(notification.channelId)
-
-            channel != null &&
-                    channel.importance < NotificationManager.IMPORTANCE_DEFAULT
+            val ranking = Ranking()
+            if (currentRanking.getRanking(sbn.key, ranking)) {
+                ranking.importance < NotificationManager.IMPORTANCE_DEFAULT
+            } else {
+                false
+            }
         } catch (e: Exception) {
             Log.w(TAG, "Could not determine whether notification is silent", e)
             false
@@ -378,7 +422,9 @@ object NotificationTransport {
         val title: String,
         val body: String,
         val icon: ByteArray?,
-        val actions: List<Action>
+        val actions: List<Action>,
+        val category: String = "",
+        val silent: Boolean = false
     )
 
     @Volatile

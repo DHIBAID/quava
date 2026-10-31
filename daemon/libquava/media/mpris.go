@@ -2,6 +2,7 @@ package media
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"libquava/models"
 	"reflect"
@@ -50,6 +51,7 @@ type MPRISService struct {
 	conn               *dbus.Conn
 	players            map[string]models.MPRISMediaPlayer
 	activePlayer       string
+	pinnedPlayer       string // user-selected player; empty means automatic selection
 	subscribers        map[uint64]chan MediaEvent
 	nextSubscriber     uint64
 	ctx                context.Context
@@ -123,27 +125,27 @@ func clonePlayer(player *models.MPRISMediaPlayer) *models.MPRISMediaPlayer {
 	if player == nil {
 		return nil
 	}
-	copy := *player
-	copy.Metadata.Artists = append([]string(nil), player.Metadata.Artists...)
-	copy.Metadata.AlbumArtist = append([]string(nil), player.Metadata.AlbumArtist...)
-	return &copy
+	clone := *player
+	clone.Metadata.Artists = append([]string(nil), player.Metadata.Artists...)
+	clone.Metadata.AlbumArtist = append([]string(nil), player.Metadata.AlbumArtist...)
+	return &clone
 }
 
 func (s *MPRISService) Start(ctx context.Context) error {
 	if ctx == nil {
-		return fmt.Errorf("MPRIS: nil context")
+		return errors.New("mpris: nil context")
 	}
 
 	s.mu.Lock()
 	if s.started || s.stopped {
 		s.mu.Unlock()
-		return fmt.Errorf("MPRIS service cannot be started")
+		return errors.New("mpris: service cannot be started")
 	}
 	s.mu.Unlock()
 
 	conn, err := dbus.ConnectSessionBus()
 	if err != nil {
-		return fmt.Errorf("MPRIS: connect to session bus: %w", err)
+		return fmt.Errorf("mpris: connect to session bus: %w", err)
 	}
 
 	serviceCtx, cancel := context.WithCancel(ctx)
@@ -172,7 +174,7 @@ func (s *MPRISService) Start(ctx context.Context) error {
 		s.mu.Lock()
 		s.conn, s.started = nil, false
 		s.mu.Unlock()
-		return fmt.Errorf("MPRIS: subscribe to name changes: %w", err)
+		return fmt.Errorf("mpris: subscribe to name changes: %w", err)
 	}
 	if err := conn.AddMatchSignal(propsMatch...); err != nil {
 		_ = conn.RemoveMatchSignal(nameMatch...)
@@ -181,7 +183,7 @@ func (s *MPRISService) Start(ctx context.Context) error {
 		s.mu.Lock()
 		s.conn, s.started = nil, false
 		s.mu.Unlock()
-		return fmt.Errorf("MPRIS: subscribe to property changes: %w", err)
+		return fmt.Errorf("mpris: subscribe to property changes: %w", err)
 	}
 	if err := conn.AddMatchSignal(seekedMatch...); err != nil {
 		_ = conn.RemoveMatchSignal(nameMatch...)
@@ -191,7 +193,7 @@ func (s *MPRISService) Start(ctx context.Context) error {
 		s.mu.Lock()
 		s.conn, s.started = nil, false
 		s.mu.Unlock()
-		return fmt.Errorf("MPRIS: subscribe to seek changes: %w", err)
+		return fmt.Errorf("mpris: subscribe to seek changes: %w", err)
 	}
 
 	conn.Signal(s.signals)
@@ -205,7 +207,7 @@ func (s *MPRISService) Start(ctx context.Context) error {
 		s.mu.Lock()
 		s.conn, s.started = nil, false
 		s.mu.Unlock()
-		return fmt.Errorf("MPRIS: initial discovery: %w", err)
+		return fmt.Errorf("mpris: initial discovery: %w", err)
 	}
 
 	s.wg.Add(1)
@@ -261,6 +263,7 @@ func (s *MPRISService) Stop() error {
 	s.conn = nil
 	s.players = make(map[string]models.MPRISMediaPlayer)
 	s.activePlayer = ""
+	s.pinnedPlayer = ""
 	for id, subscriber := range s.subscribers {
 		delete(s.subscribers, id)
 		close(subscriber)
@@ -268,7 +271,7 @@ func (s *MPRISService) Stop() error {
 	s.mu.Unlock()
 
 	if err != nil {
-		return fmt.Errorf("MPRIS: close session bus: %w", err)
+		return fmt.Errorf("mpris: close session bus: %w", err)
 	}
 	return nil
 }
@@ -287,16 +290,13 @@ func (s *MPRISService) ListPlayers() []models.MPRISMediaPlayer {
 	return players
 }
 
-// Refresh updates the cached player state immediately after a control action.
-func (s *MPRISService) Refresh() error { return s.refreshPlayers() }
-
 func (s *MPRISService) GetPlayer(busName string) (models.MPRISMediaPlayer, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
 	player, ok := s.players[busName]
 	if !ok {
-		return models.MPRISMediaPlayer{}, fmt.Errorf("MPRIS player %q not found", busName)
+		return models.MPRISMediaPlayer{}, fmt.Errorf("mpris: player %q not found", busName)
 	}
 	return player, nil
 }
@@ -307,19 +307,46 @@ func (s *MPRISService) ActivePlayer() (models.MPRISMediaPlayer, error) {
 
 	player, ok := s.players[s.activePlayer]
 	if !ok {
-		return models.MPRISMediaPlayer{}, fmt.Errorf("no active MPRIS player")
+		return models.MPRISMediaPlayer{}, errors.New("mpris: no active player")
 	}
 	return player, nil
+}
+
+// PinnedPlayer reports the user-selected player, or "" in automatic mode.
+func (s *MPRISService) PinnedPlayer() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.pinnedPlayer
+}
+
+// UseAutomaticPlayer drops a manual selection and returns to choosing the
+// active player from playback state.
+func (s *MPRISService) UseAutomaticPlayer() {
+	s.mu.Lock()
+	s.pinnedPlayer = ""
+	changed := s.updateActivePlayerLocked()
+	s.syncPositionTickerLocked()
+	active, ok := s.players[s.activePlayer]
+	name := s.activePlayer
+	s.mu.Unlock()
+	if changed {
+		event := MediaEvent{Type: MediaEventActivePlayerChanged, PlayerID: name}
+		if ok {
+			event.State = &active
+		}
+		s.notify(event)
+	}
 }
 
 func (s *MPRISService) SetActivePlayer(busName string) error {
 	s.mu.Lock()
 	if _, ok := s.players[busName]; !ok {
 		s.mu.Unlock()
-		return fmt.Errorf("MPRIS player %q not found", busName)
+		return fmt.Errorf("mpris: player %q not found", busName)
 	}
 	previous := s.activePlayer
 	s.activePlayer = busName
+	s.pinnedPlayer = busName
 	for name, player := range s.players {
 		player.IsActive = name == busName
 		s.players[name] = player
@@ -399,7 +426,7 @@ func (s *MPRISService) fetchInvalidatedProperties(
 	s.mu.RUnlock()
 
 	if conn == nil {
-		return nil, fmt.Errorf("MPRIS: D-Bus connection is not available")
+		return nil, errors.New("mpris: D-Bus connection is not available")
 	}
 
 	obj := conn.Object(busName, mprisPath)
@@ -537,9 +564,19 @@ func (s *MPRISService) handlePropertiesChanged(signal *dbus.Signal) []MediaEvent
 func (s *MPRISService) updateActivePlayerLocked() bool {
 	previous := s.activePlayer
 
-	if current, ok := s.players[s.activePlayer]; !ok ||
-		current.PlaybackStatus != "Playing" {
+	// A manual selection wins for as long as that player exists.
+	pinned := false
+	if s.pinnedPlayer != "" {
+		if _, ok := s.players[s.pinnedPlayer]; ok {
+			s.activePlayer = s.pinnedPlayer
+			pinned = true
+		} else {
+			s.pinnedPlayer = ""
+		}
+	}
 
+	if current, ok := s.players[s.activePlayer]; !pinned && (!ok ||
+		current.PlaybackStatus != "Playing") {
 		s.activePlayer = ""
 
 		if p, ok := s.players[previous]; ok &&
@@ -785,17 +822,17 @@ func (s *MPRISService) refreshPlayers() error {
 	conn := s.conn
 	s.mu.RUnlock()
 	if conn == nil {
-		return fmt.Errorf("MPRIS service is not connected")
+		return errors.New("mpris: service is not connected")
 	}
 
 	var names []string
 	if err := conn.BusObject().Call(dbusIface+".ListNames", 0).Store(&names); err != nil {
-		return fmt.Errorf("list D-Bus names: %w", err)
+		return fmt.Errorf("mpris: list D-Bus names: %w", err)
 	}
 
 	found := make(map[string]models.MPRISMediaPlayer)
 	for _, name := range names {
-		if !strings.HasPrefix(name, mprisPrefix) {
+		if !strings.HasPrefix(name, mprisPrefix) || isMPRISProxy(name) {
 			continue
 		}
 
@@ -924,8 +961,8 @@ func (s *MPRISService) refreshPlayers() error {
 	}
 	for name, player := range found {
 		if _, exists := previous[name]; !exists {
-			copy := player
-			events = append(events, MediaEvent{Type: MediaEventPlayersChanged, PlayerID: name, State: &copy})
+			added := player
+			events = append(events, MediaEvent{Type: MediaEventPlayersChanged, PlayerID: name, State: &added})
 		}
 	}
 	if activeChanged || previousActive != activeName {
@@ -954,6 +991,19 @@ func mprisTrackID(value any) string {
 	return ""
 }
 
+// isMPRISProxy reports bus names that merely mirror another player or device.
+// playerctld re-exports whichever player was last active, so listing it shows
+// every player twice (and Quava would control it instead of the real player).
+func isMPRISProxy(name string) bool {
+	short := strings.ToLower(strings.TrimPrefix(name, mprisPrefix))
+	// GSConnect/KDE Connect export the *phone's* media sessions on the host.
+	// Quava's own Android media notification is one of them, so listing them
+	// would let the host control itself through the phone in a loop.
+	return short == "playerctld" ||
+		strings.HasPrefix(short, "gsconnect.") ||
+		strings.HasPrefix(short, "kdeconnect.")
+}
+
 func mprisNumber(value any) int64 {
 	switch n := value.(type) {
 	case int64:
@@ -972,7 +1022,7 @@ func mprisNumber(value any) int64 {
 // and D-Bus error handling in one place.
 func (s *MPRISService) callPlayer(busName, method string, args ...any) error {
 	if !strings.HasPrefix(busName, mprisPrefix) {
-		return fmt.Errorf("invalid MPRIS bus name %q", busName)
+		return fmt.Errorf("mpris: invalid bus name %q", busName)
 	}
 
 	s.mu.RLock()
@@ -980,10 +1030,10 @@ func (s *MPRISService) callPlayer(busName, method string, args ...any) error {
 	_, exists := s.players[busName]
 	s.mu.RUnlock()
 	if conn == nil {
-		return fmt.Errorf("MPRIS service is not started")
+		return errors.New("mpris: service is not started")
 	}
 	if !exists {
-		return fmt.Errorf("MPRIS player %q not found", busName)
+		return fmt.Errorf("mpris: player %q not found", busName)
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), callTimeout)
@@ -991,7 +1041,7 @@ func (s *MPRISService) callPlayer(busName, method string, args ...any) error {
 	if err := conn.Object(busName, mprisPath).CallWithContext(
 		ctx, mprisPlayer+"."+method, 0, args...,
 	).Err; err != nil {
-		return fmt.Errorf("MPRIS %s on %s: %w", method, busName, err)
+		return fmt.Errorf("mpris: %s on %s: %w", method, busName, err)
 	}
 	return nil
 }
@@ -1002,7 +1052,7 @@ func (s *MPRISService) PlayPause(busName string) error {
 		return err
 	}
 	if !player.CanControl || (!player.CanPlay && !player.CanPause) {
-		return fmt.Errorf("MPRIS player %q does not support play/pause", busName)
+		return fmt.Errorf("mpris: player %q does not support play/pause", busName)
 	}
 	return s.callPlayer(busName, "PlayPause")
 }
@@ -1013,7 +1063,7 @@ func (s *MPRISService) Next(busName string) error {
 		return err
 	}
 	if !player.CanControl || !player.CanGoNext {
-		return fmt.Errorf("MPRIS player %q cannot skip forward", busName)
+		return fmt.Errorf("mpris: player %q cannot skip forward", busName)
 	}
 	return s.callPlayer(busName, "Next")
 }
@@ -1024,7 +1074,7 @@ func (s *MPRISService) Previous(busName string) error {
 		return err
 	}
 	if !player.CanControl || !player.CanGoPrevious {
-		return fmt.Errorf("MPRIS player %q cannot skip backward", busName)
+		return fmt.Errorf("mpris: player %q cannot skip backward", busName)
 	}
 	return s.callPlayer(busName, "Previous")
 }
@@ -1035,7 +1085,7 @@ func (s *MPRISService) Seek(busName string, offset time.Duration) error {
 		return err
 	}
 	if !player.CanControl || !player.CanSeek {
-		return fmt.Errorf("MPRIS player %q does not support seeking", busName)
+		return fmt.Errorf("mpris: player %q does not support seeking", busName)
 	}
 	if offset == 0 {
 		return nil
@@ -1051,7 +1101,7 @@ func (s *MPRISService) SeekTo(busName string, position time.Duration) error {
 		return err
 	}
 	if !player.CanControl || !player.CanSeek {
-		return fmt.Errorf("MPRIS player %q does not support seeking", busName)
+		return fmt.Errorf("mpris: player %q does not support seeking", busName)
 	}
 	target := position.Microseconds()
 	if target < 0 {
@@ -1074,13 +1124,13 @@ func (s *MPRISService) SeekTo(busName string, position time.Duration) error {
 	conn := s.conn
 	s.mu.RUnlock()
 	if conn == nil {
-		return fmt.Errorf("MPRIS service is not started")
+		return errors.New("mpris: service is not started")
 	}
 	var value dbus.Variant
 	if err := conn.Object(busName, mprisPath).CallWithContext(
 		ctx, dbusProps+".Get", 0, mprisPlayer, "Position",
 	).Store(&value); err != nil {
-		return fmt.Errorf("MPRIS get Position on %s: %w", busName, err)
+		return fmt.Errorf("mpris: get Position on %s: %w", busName, err)
 	}
 	delta := target - mprisNumber(value.Value())
 	if delta == 0 {
@@ -1095,7 +1145,7 @@ func (s *MPRISService) Play(busName string) error {
 		return err
 	}
 	if !player.CanControl || !player.CanPlay {
-		return fmt.Errorf("MPRIS player %q cannot play", busName)
+		return fmt.Errorf("mpris: player %q cannot play", busName)
 	}
 	return s.callPlayer(busName, "Play")
 }
@@ -1106,7 +1156,7 @@ func (s *MPRISService) Pause(busName string) error {
 		return err
 	}
 	if !player.CanControl || !player.CanPause {
-		return fmt.Errorf("MPRIS player %q cannot pause", busName)
+		return fmt.Errorf("mpris: player %q cannot pause", busName)
 	}
 	return s.callPlayer(busName, "Pause")
 }
@@ -1117,7 +1167,7 @@ func (s *MPRISService) StopPlayback(busName string) error {
 		return err
 	}
 	if !player.CanControl {
-		return fmt.Errorf("MPRIS player %q cannot be controlled", busName)
+		return fmt.Errorf("mpris: player %q cannot be controlled", busName)
 	}
 	return s.callPlayer(busName, "Stop")
 }
@@ -1130,7 +1180,7 @@ func (s *MPRISService) SetLoopStatus(busName, status string) error {
 	switch status {
 	case "None", "Track", "Playlist":
 	default:
-		return fmt.Errorf("invalid loop status %q", status)
+		return fmt.Errorf("mpris: invalid loop status %q", status)
 	}
 	return s.setPlayerProperty(busName, "LoopStatus", dbus.MakeVariant(status))
 }
@@ -1138,7 +1188,7 @@ func (s *MPRISService) SetLoopStatus(busName, status string) error {
 // SetPlayerVolume controls the application's MPRIS volume, not system volume.
 func (s *MPRISService) SetPlayerVolume(busName string, volume float64) error {
 	if volume < 0 {
-		return fmt.Errorf("volume cannot be negative")
+		return errors.New("mpris: volume cannot be negative")
 	}
 	return s.setPlayerProperty(busName, "Volume", dbus.MakeVariant(volume))
 }
@@ -1148,7 +1198,7 @@ func (s *MPRISService) setPlayerProperty(
 	value dbus.Variant,
 ) error {
 	if !strings.HasPrefix(busName, mprisPrefix) {
-		return fmt.Errorf("invalid MPRIS bus name %q", busName)
+		return fmt.Errorf("mpris: invalid bus name %q", busName)
 	}
 
 	s.mu.RLock()
@@ -1156,10 +1206,10 @@ func (s *MPRISService) setPlayerProperty(
 	_, exists := s.players[busName]
 	s.mu.RUnlock()
 	if conn == nil {
-		return fmt.Errorf("MPRIS service is not started")
+		return errors.New("mpris: service is not started")
 	}
 	if !exists {
-		return fmt.Errorf("MPRIS player %q not found", busName)
+		return fmt.Errorf("mpris: player %q not found", busName)
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), callTimeout)
@@ -1167,7 +1217,7 @@ func (s *MPRISService) setPlayerProperty(
 	if err := conn.Object(busName, mprisPath).CallWithContext(
 		ctx, dbusProps+".Set", 0, mprisPlayer, property, value,
 	).Err; err != nil {
-		return fmt.Errorf("MPRIS set %s on %s: %w", property, busName, err)
+		return fmt.Errorf("mpris: set %s on %s: %w", property, busName, err)
 	}
 	return nil
 }

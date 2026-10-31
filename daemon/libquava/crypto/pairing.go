@@ -7,10 +7,10 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"libquava/models"
 
-	"golang.org/x/crypto/chacha20poly1305"
 	"golang.org/x/crypto/hkdf"
 )
 
@@ -18,7 +18,7 @@ import (
 func GenerateIdentityKeyPair() (models.Identity, error) {
 	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
-		return models.Identity{}, fmt.Errorf("generate ed25519 identity: %w", err)
+		return models.Identity{}, fmt.Errorf("crypto: generate ed25519 identity: %w", err)
 	}
 	return models.Identity{PrivateKey: privateKey, PublicKey: publicKey}, nil
 }
@@ -39,7 +39,7 @@ func DeviceIDBytes(publicKey ed25519.PublicKey) []byte {
 func GenerateTransactionID() ([]byte, error) {
 	transactionID := make([]byte, 16)
 	if _, err := rand.Read(transactionID); err != nil {
-		return nil, fmt.Errorf("generate transaction id: %w", err)
+		return nil, fmt.Errorf("crypto: generate transaction id: %w", err)
 	}
 	return transactionID, nil
 }
@@ -48,7 +48,7 @@ func GenerateTransactionID() ([]byte, error) {
 func GenerateNonce() ([]byte, error) {
 	nonce := make([]byte, 32)
 	if _, err := rand.Read(nonce); err != nil {
-		return nil, fmt.Errorf("generate nonce: %w", err)
+		return nil, fmt.Errorf("crypto: generate nonce: %w", err)
 	}
 	return nonce, nil
 }
@@ -58,7 +58,7 @@ func GenerateX25519KeyPair() ([]byte, []byte, error) {
 	curve := ecdh.X25519()
 	privateKey, err := curve.GenerateKey(rand.Reader)
 	if err != nil {
-		return nil, nil, fmt.Errorf("generate x25519 key pair: %w", err)
+		return nil, nil, fmt.Errorf("crypto: generate x25519 key pair: %w", err)
 	}
 	return privateKey.Bytes(), privateKey.PublicKey().Bytes(), nil
 }
@@ -68,15 +68,15 @@ func X25519SharedSecret(privateKey []byte, peerPublicKey []byte) ([]byte, error)
 	curve := ecdh.X25519()
 	privateKeyObject, err := curve.NewPrivateKey(privateKey)
 	if err != nil {
-		return nil, fmt.Errorf("parse x25519 private key: %w", err)
+		return nil, fmt.Errorf("crypto: parse x25519 private key: %w", err)
 	}
 	publicKeyObject, err := curve.NewPublicKey(peerPublicKey)
 	if err != nil {
-		return nil, fmt.Errorf("parse x25519 public key: %w", err)
+		return nil, fmt.Errorf("crypto: parse x25519 public key: %w", err)
 	}
 	sharedSecret, err := privateKeyObject.ECDH(publicKeyObject)
 	if err != nil {
-		return nil, fmt.Errorf("derive x25519 shared secret: %w", err)
+		return nil, fmt.Errorf("crypto: derive x25519 shared secret: %w", err)
 	}
 	return sharedSecret, nil
 }
@@ -86,7 +86,7 @@ func HKDFSHA256(salt, ikm, info []byte, length int) ([]byte, error) {
 	reader := hkdf.New(sha256.New, ikm, salt, info)
 	derived := make([]byte, length)
 	if _, err := reader.Read(derived); err != nil {
-		return nil, fmt.Errorf("hkdf-sha256: %w", err)
+		return nil, fmt.Errorf("crypto: hkdf-sha256: %w", err)
 	}
 	return derived, nil
 }
@@ -123,7 +123,7 @@ func SignTranscript(privateKey ed25519.PrivateKey, transcript []byte) []byte {
 func VerifyTranscript(publicKey ed25519.PublicKey, transcript, signature []byte) error {
 	digest := TranscriptDigest(transcript)
 	if !ed25519.Verify(publicKey, digest, signature) {
-		return fmt.Errorf("ed25519 verification failed")
+		return errors.New("crypto: ed25519 verification failed")
 	}
 	return nil
 }
@@ -168,34 +168,30 @@ func ConfirmationMAC(masterSecret, transactionID []byte) []byte {
 	return mac.Sum(nil)
 }
 
-// SessionCipher encrypts a payload with ChaCha20-Poly1305.
-func SessionCipher(key, plaintext, additionalData []byte) ([]byte, error) {
-	cipher, err := chacha20poly1305.NewX(key)
-	if err != nil {
-		return nil, fmt.Errorf("chacha20poly1305: %w", err)
-	}
-	nonce := make([]byte, cipher.NonceSize())
-	if _, err := rand.Read(nonce); err != nil {
-		return nil, fmt.Errorf("generate session nonce: %w", err)
-	}
-	sealed := cipher.Seal(append([]byte(nil), nonce...), nonce, plaintext, additionalData)
-	return sealed, nil
-}
+// Labels binding each derived key to a direction, so the two directions never
+// share a key (which would let a frame be reflected back at its sender).
+const (
+	sessionKeyHostToPeer = "quava-session-frames-host-to-peer-v1"
+	sessionKeyPeerToHost = "quava-session-frames-peer-to-host-v1"
+)
 
-// SessionDecipher decrypts a payload sealed by SessionCipher.
-func SessionDecipher(key, ciphertext, additionalData []byte) ([]byte, error) {
-	cipher, err := chacha20poly1305.NewX(key)
+// SessionKeys derives the two frame-encryption keys for one session from the
+// paired credential and the authenticated handshake transcript. The transcript
+// contains both sides' fresh nonces, so every session gets new keys. The
+// credential only exists on the two paired devices, so no one who merely watched
+// the handshake can compute them.
+func SessionKeys(credential, transcript []byte) (hostToPeer, peerToHost []byte, err error) {
+	salt := sha256.Sum256(transcript)
+
+	hostToPeer, err = HKDFSHA256(salt[:], credential, []byte(sessionKeyHostToPeer), 32)
 	if err != nil {
-		return nil, fmt.Errorf("chacha20poly1305: %w", err)
+		return nil, nil, err
 	}
-	if len(ciphertext) < cipher.NonceSize() {
-		return nil, fmt.Errorf("ciphertext too short")
-	}
-	nonce := ciphertext[:cipher.NonceSize()]
-	sealed := ciphertext[cipher.NonceSize():]
-	plaintext, err := cipher.Open(nil, nonce, sealed, additionalData)
+
+	peerToHost, err = HKDFSHA256(salt[:], credential, []byte(sessionKeyPeerToHost), 32)
 	if err != nil {
-		return nil, fmt.Errorf("decrypt session payload: %w", err)
+		return nil, nil, err
 	}
-	return plaintext, nil
+
+	return hostToPeer, peerToHost, nil
 }

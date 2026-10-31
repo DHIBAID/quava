@@ -48,10 +48,10 @@ var notificationIDs = struct {
 	androidToLinux: make(map[uint32]uint32),
 }
 
-func NewDBusNotificationWatcher(push DBusPushFunc, clear DBusClearFunc) *DBusNotificationService {
+func NewDBusNotificationWatcher(push DBusPushFunc, onClear DBusClearFunc) *DBusNotificationService {
 	return &DBusNotificationService{
 		push:              push,
-		clear:             clear,
+		clear:             onClear,
 		pendingNotifs:     make(map[string]models.NotificationContent),
 		notificationIDMap: make(map[uint32]uint32),
 	}

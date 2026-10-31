@@ -32,6 +32,16 @@ data class HostMediaState(
     val systemMuted: Boolean = false,
     val outputDevice: String = "",
     val outputDevices: List<AudioOutputDevice> = emptyList(),
+    val players: List<HostMediaPlayer> = emptyList(),
+    val playerPinned: Boolean = false,
+)
+
+data class HostMediaPlayer(
+    val busName: String,
+    val identity: String,
+    val playbackStatus: String,
+    val isActive: Boolean,
+    val icon: ByteArray? = null, // 64x64 PNG from the host, if it has one
 )
 
 object MediaActions {
@@ -39,16 +49,13 @@ object MediaActions {
     const val PLAY_PAUSE = "play-pause"
     const val PLAY = "play"
     const val PAUSE = "pause"
-    const val STOP = "stop"
     const val NEXT = "next"
     const val PREVIOUS = "previous"
-    const val SEEK = "seek"
+    const val SELECT_PLAYER = "select-player" // empty busName = automatic
     const val SEEK_TO = "seek-to"
     const val SHUFFLE = "shuffle"
     const val LOOP = "loop"
     const val VOLUME = "volume"
-    const val SYSTEM_VOLUME = "system-volume"
-    const val SYSTEM_MUTE = "system-mute"
     const val SYSTEM_AUDIO_STATE = "system-audio-state"
     const val SYSTEM_AUDIO_VOLUME = "system-audio-volume"
     const val SYSTEM_AUDIO_MUTE = "system-audio-mute"

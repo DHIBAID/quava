@@ -35,13 +35,13 @@ func Start(cfg Config, logger *slog.Logger) (*Server, error) {
 	// Restrict profiling to localhost.
 	host, _, err := net.SplitHostPort(cfg.Address)
 	if err != nil {
-		return nil, fmt.Errorf("invalid profiling address: %w", err)
+		return nil, fmt.Errorf("profiling: invalid address: %w", err)
 	}
 
 	ip := net.ParseIP(host)
 	if ip == nil || !ip.IsLoopback() {
 		return nil, fmt.Errorf(
-			"profiling address must be loopback: %s",
+			"profiling: address must be loopback: %s",
 			cfg.Address,
 		)
 	}
@@ -76,7 +76,7 @@ func Start(cfg Config, logger *slog.Logger) (*Server, error) {
 
 	listener, err := net.Listen("tcp", cfg.Address)
 	if err != nil {
-		return nil, fmt.Errorf("starting profiling listener: %w", err)
+		return nil, fmt.Errorf("profiling: listen: %w", err)
 	}
 
 	s := &Server{

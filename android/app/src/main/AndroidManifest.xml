@@ -14,6 +14,10 @@
     <!-- Android 13+: needed to show the foreground service notification -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
+    <!-- Lets the app read the mobile network type (4G/5G) to show on the computer. Optional. -->
+    <uses-permission android:name="android.permission.READ_PHONE_STATE" />
+    <uses-feature android:name="android.hardware.telephony" android:required="false" />
+
     <!-- Granted by the user in Android's Notification Access settings. -->
     <uses-permission android:name="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE" />
 

@@ -6,6 +6,7 @@ import (
 	"net"
 	"strconv"
 	"strings"
+	"time"
 
 	"libquava/protocol"
 )
@@ -51,7 +52,7 @@ func (d Device) Connect(ctx context.Context) (*Connection, error) {
 		return nil, fmt.Errorf("discovery: invalid port %d", d.Port)
 	}
 
-	dialer := net.Dialer{}
+	dialer := net.Dialer{Timeout: 6 * time.Second}
 	targetHost := strings.TrimSpace(d.Address)
 
 	if targetHost == "" {

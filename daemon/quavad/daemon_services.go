@@ -8,6 +8,7 @@ import (
 
 	"libquava/clipboard"
 	"libquava/config"
+	"libquava/media"
 	lq "libquava/models"
 	"libquava/session"
 	"quavad/models"
@@ -224,10 +225,78 @@ func (d *Daemon) mediaSetActive(req models.Request, enc *json.Encoder) {
 }
 
 func (d *Daemon) mediaControl(req models.Request, enc *json.Encoder) {
-	err := session.ControlMedia(session.MediaCommand{Command: req.Command, BusName: req.BusName, OffsetMS: req.OffsetMS, Enabled: req.Enabled, LoopStatus: req.LoopStatus, Volume: req.Volume})
+	err := session.ControlMedia(session.MediaCommand{Command: req.Command, BusName: req.BusName, OffsetMS: req.OffsetMS, PositionMS: req.PositionMS, Enabled: req.Enabled, LoopStatus: req.LoopStatus, Volume: req.Volume})
 	if err != nil {
 		_ = enc.Encode(models.Response{Error: err.Error()})
 		return
 	}
 	_ = enc.Encode(models.Response{})
+}
+
+func (d *Daemon) mediaAuto(_ models.Request, enc *json.Encoder) {
+	if err := session.UseAutomaticMediaPlayer(); err != nil {
+		_ = enc.Encode(models.Response{Error: err.Error()})
+		return
+	}
+	_ = enc.Encode(models.Response{})
+}
+
+func (d *Daemon) audioList(_ models.Request, enc *json.Encoder) {
+	devices, err := media.ListAudioOutputDevices()
+	if err != nil {
+		_ = enc.Encode(models.Response{Error: err.Error()})
+		return
+	}
+	_ = enc.Encode(models.Response{AudioDevices: devices})
+}
+
+// audioControl applies a system-audio change to req.Device (the default
+// output when empty).
+func (d *Daemon) audioControl(req models.Request, enc *json.Encoder) {
+	var err error
+	switch req.Command {
+	case "audio-volume":
+		err = media.SetOutputDeviceVolume(req.Device, req.Volume)
+	case "audio-mute":
+		err = media.SetOutputDeviceMuted(req.Device, req.Enabled)
+	case "audio-default":
+		err = media.SetDefaultOutputDevice(req.Device)
+	}
+	if err != nil {
+		_ = enc.Encode(models.Response{Error: err.Error()})
+		return
+	}
+	_ = enc.Encode(models.Response{})
+}
+
+func (d *Daemon) notificationFiltersGet(_ models.Request, enc *json.Encoder) {
+	d.mu.Lock()
+	filters := d.store.NotificationFilters()
+	d.mu.Unlock()
+	_ = enc.Encode(models.Response{Filters: &filters})
+}
+
+// notificationFiltersSet validates, persists, and applies new filters to the
+// running bridge immediately.
+func (d *Daemon) notificationFiltersSet(req models.Request, enc *json.Encoder) {
+	if req.Filters == nil {
+		_ = enc.Encode(models.Response{Error: "filters are required"})
+		return
+	}
+
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if err := d.store.SetNotificationFilters(*req.Filters); err != nil {
+		_ = enc.Encode(models.Response{Error: err.Error()})
+		return
+	}
+	if err := d.store.Save(); err != nil {
+		_ = enc.Encode(models.Response{Error: err.Error()})
+		return
+	}
+	if d.androidNotifications != nil {
+		d.androidNotifications.SetFilters(d.store.NotificationFilters())
+	}
+	filters := d.store.NotificationFilters()
+	_ = enc.Encode(models.Response{Filters: &filters})
 }

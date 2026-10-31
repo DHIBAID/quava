@@ -2,10 +2,19 @@ package protocol
 
 const DefaultMaxFrameSize = 64 * 1024
 
+// Payload limits. A whole frame is capped at DefaultMaxFrameSize, so large
+// payloads leave room for the message wrapped around them.
+const (
+	MaxClipboardBytes = 48 * 1024
+	MaxArtworkBytes   = 48 * 1024
+)
+
 const (
 	ProtocolName        = "quava-pairing"
 	SessionProtocolName = "quava-session"
-	ProtocolVersion     = 1
+	// Version 2 introduced encrypted session frames; version 1 peers are
+	// rejected at the handshake instead of silently speaking plaintext.
+	ProtocolVersion = 2
 
 	MessageTypePairRequest      = 0x01
 	MessageTypePairChallenge    = 0x02
@@ -47,6 +56,15 @@ const (
 	MessageTypeInputEvent    = 0x2e
 	MessageTypeInputEventAck = 0x2f
 
+	// Either side may send Unpair on an authenticated session to say "forget
+	// me". The receiver removes the sender's trust record and acknowledges.
+	MessageTypeUnpair    = 0x33
+	MessageTypeUnpairAck = 0x34
+
+	// DeviceStatus is sent by the phone whenever its battery, radios or
+	// storage change. It needs no acknowledgement.
+	MessageTypeDeviceStatus = 0x35
+
 	MessageTypeMultimedia      = 0x30
 	MessageTypeMultimediaAck   = 0x31
 	MessageTypeMultimediaState = 0x32
@@ -57,6 +75,10 @@ const (
 	MultimediaStateUpdateType uint64 = 20
 	MultimediaStateFull       uint64 = 0
 	MultimediaStatePosition   uint64 = 1
+	// MultimediaStateIcon carries one player's 64x64 PNG icon:
+	// key 2 = bus name, key 4 = PNG bytes. Sent separately from full state so
+	// it can never push a frame past the size limit.
+	MultimediaStateIcon uint64 = 2
 
 	// PingPayloadSilent marks a heartbeat Ping that should not generate a
 	// user-visible notification on the receiving device.

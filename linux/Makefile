@@ -10,11 +10,19 @@ SRC_DIR := src
 SOURCES := $(shell find $(SRC_DIR) -type f -name '*.c')
 OBJECTS := $(patsubst $(SRC_DIR)/%.c,$(BUILD_DIR)/%.o,$(SOURCES))
 
-CFLAGS += -Wall -Wextra -Wpedantic -O2
-CFLAGS += $(shell $(PKG_CONFIG) --cflags gtk4 json-glib-1.0 gio-unix-2.0)
-LDLIBS += $(shell $(PKG_CONFIG) --libs gtk4 json-glib-1.0 gio-unix-2.0)
+# The stylesheet and app icon are compiled into the binary, so it runs from
+# anywhere without a res/ directory next to it.
+RESOURCE_XML := res/quava.gresource.xml
+RESOURCE_FILES := $(shell glib-compile-resources --generate-dependencies --sourcedir=res $(RESOURCE_XML))
+RESOURCE_OBJ := $(BUILD_DIR)/resources.o
+OBJECTS += $(RESOURCE_OBJ)
 
-.PHONY: all build run clean
+CFLAGS += -Wall -Wextra -Wpedantic -Wshadow -Wformat=2 -Wnull-dereference -Wconversion -Wcast-qual -Wundef
+CFLAGS += -Wstrict-prototypes -Wmissing-prototypes -Wredundant-decls -O2
+CFLAGS += $(shell $(PKG_CONFIG) --cflags gtk4 json-glib-1.0 gio-unix-2.0)
+LDLIBS += $(shell $(PKG_CONFIG) --libs gtk4 json-glib-1.0 gio-unix-2.0) -lm
+
+.PHONY: all build run clean install uninstall
 
 all: build
 
@@ -22,6 +30,13 @@ build: $(BUILD_DIR)/$(TARGET)
 
 $(BUILD_DIR)/$(TARGET): $(OBJECTS)
 	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS)
+
+$(BUILD_DIR)/resources.c: $(RESOURCE_XML) $(RESOURCE_FILES)
+	mkdir -p $(BUILD_DIR)
+	glib-compile-resources --target=$@ --sourcedir=res --generate-source $<
+
+$(RESOURCE_OBJ): $(BUILD_DIR)/resources.c
+	$(CC) $(filter-out -Wpedantic -Wextra,$(CFLAGS)) -c $< -o $@
 
 $(BUILD_DIR)/%.o: $(SRC_DIR)/%.c
 	mkdir -p $(dir $@)
@@ -32,3 +47,18 @@ run: build
 
 clean:
 	rm -rf $(BUILD_DIR)
+
+# Install for the current user: the app shows up in the launcher with its icon.
+# It is installed as quava-gui because `quava` is already the command-line tool.
+install: build
+	install -Dm755 $(BUILD_DIR)/$(TARGET) "$(HOME)/.local/bin/quava-gui"
+	install -Dm644 res/icon.png "$(HOME)/.local/share/icons/hicolor/192x192/apps/io.quava.Desktop.png"
+	install -Dm644 res/io.quava.Desktop.desktop "$(HOME)/.local/share/applications/io.quava.Desktop.desktop"
+	-gtk-update-icon-cache -q -t "$(HOME)/.local/share/icons/hicolor"
+	-update-desktop-database -q "$(HOME)/.local/share/applications"
+	@echo "Installed Quava. Launch it from your app menu or run quava-gui."
+
+uninstall:
+	rm -f "$(HOME)/.local/bin/quava-gui" \
+		"$(HOME)/.local/share/icons/hicolor/192x192/apps/io.quava.Desktop.png" \
+		"$(HOME)/.local/share/applications/io.quava.Desktop.desktop"

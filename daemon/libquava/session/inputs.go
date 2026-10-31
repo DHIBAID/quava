@@ -2,6 +2,7 @@ package session
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"math"
@@ -29,7 +30,7 @@ func (s *Session) handleRemoteInput(ctx context.Context, msg protocol.Message) e
 
 func (s *Session) applyRemoteInput(ctx context.Context, input models.RemoteInput) error {
 	if s.remoteInput == nil {
-		return fmt.Errorf("remote input is unavailable")
+		return errors.New("remote input: unavailable")
 	}
 	return s.remoteInput(ctx, input)
 }
@@ -128,7 +129,7 @@ func remoteInputFromPayload(payload map[uint64]any) (models.RemoteInput, error) 
 		var valid bool
 		textValue, valid = rawText.(string)
 		if !valid {
-			return models.RemoteInput{}, fmt.Errorf("invalid text field")
+			return models.RemoteInput{}, errors.New("remote input: invalid text field")
 		}
 	}
 	x, err := optionalFloat(payload, 4)
@@ -140,7 +141,7 @@ func remoteInputFromPayload(payload map[uint64]any) (models.RemoteInput, error) 
 		return models.RemoteInput{}, err
 	}
 	if typeValue > math.MaxUint8 || actionValue > math.MaxUint8 || keyCode > math.MaxUint32 || button > math.MaxUint8 {
-		return models.RemoteInput{}, fmt.Errorf("input field is out of range")
+		return models.RemoteInput{}, errors.New("remote input: field is out of range")
 	}
 	input := models.RemoteInput{Type: models.InputType(typeValue), Action: models.InputAction(actionValue), KeyCode: uint32(keyCode), Button: uint8(button), X: x, Y: y, Text: textValue}
 	if err := input.Validate(); err != nil {
@@ -181,5 +182,5 @@ func optionalFloat(payload map[uint64]any, key uint64) (float64, error) {
 	case int:
 		return float64(value), nil
 	}
-	return 0, fmt.Errorf("invalid floating-point field %d", key)
+	return 0, fmt.Errorf("remote input: invalid floating-point field %d", key)
 }

@@ -1,40 +1,540 @@
-.section {
-    background-color: alpha(@theme_base_color, 0.35);
-    border-radius: 10px;
-    padding: 14px;
+/*
+ * Quava design tokens. The palette mirrors the Android client:
+ *   banana yellow primary, rose tertiary, and warm black-grey neutrals
+ * (no cool or purple-tinted greys anywhere).
+ * `--q-accent` is the primary colour as used for text/icons (darkened on light
+ * backgrounds for contrast); `--q-primary` is the filled-surface colour.
+ */
+
+window.quava.dark {
+    --q-bg: #1a1915;
+    --q-sidebar: #14130f;
+    --q-card: #22211c;
+    --q-card-hi: #2c2a24;
+    --q-field: #1a1915;
+    --q-line: rgba(232, 227, 216, 0.11);
+    --q-line-strong: rgba(232, 227, 216, 0.26);
+    --q-text: #e8e3d8;
+    --q-text-2: #cbc5b5;
+    --q-text-3: #968f7e;
+    --q-primary: #e6c65a;
+    --q-accent: #e6c65a;
+    --q-on-primary: #1c1a12;
+    --q-primary-soft: rgba(230, 198, 90, 0.14);
+    --q-primary-line: rgba(230, 198, 90, 0.5);
+    --q-tertiary: #efb8c8;
+    --q-tertiary-soft: rgba(239, 184, 200, 0.14);
+    --q-danger: #f2b8b5;
+    --q-danger-soft: rgba(242, 184, 181, 0.14);
+    --q-shadow: rgba(0, 0, 0, 0.35);
 }
 
-.device-panel {
-    padding: 10px;
+window.quava.light {
+    --q-bg: #fbf8f1;
+    --q-sidebar: #f3efe5;
+    --q-card: #ffffff;
+    --q-card-hi: #eeeadf;
+    --q-field: #f3efe5;
+    --q-line: rgba(51, 45, 30, 0.13);
+    --q-line-strong: rgba(51, 45, 30, 0.3);
+    --q-text: #1d1b16;
+    --q-text-2: #4b473b;
+    --q-text-3: #7d7767;
+    --q-primary: #ffd84d;
+    --q-accent: #7a5f00;
+    --q-on-primary: #232115;
+    --q-primary-soft: rgba(255, 216, 77, 0.3);
+    --q-primary-line: rgba(122, 95, 0, 0.5);
+    --q-tertiary: #7d5260;
+    --q-tertiary-soft: rgba(125, 82, 96, 0.12);
+    --q-danger: #b3261e;
+    --q-danger-soft: rgba(179, 38, 30, 0.1);
+    --q-shadow: rgba(60, 40, 0, 0.14);
 }
 
-.section-title {
-    font-size: 1.08em;
+/* ---- Base ---------------------------------------------------------------- */
+
+window.quava {
+    background-color: var(--q-bg);
+    color: var(--q-text);
 }
 
-.subtitle {
-    opacity: 0.72;
+window.quava .q-icon {
+    color: var(--q-text-2);
 }
 
-.device-list {
+/* ---- Title bar ------------------------------------------------------------ */
+
+window.quava headerbar {
+    background-color: var(--q-sidebar);
+    background-image: none;
+    border-bottom: 1px solid var(--q-line);
+    box-shadow: none;
+    min-height: 46px;
+    color: var(--q-text);
+}
+
+window.quava headerbar .q-icon {
+    color: var(--q-text-2);
+}
+
+.q-wordmark {
+    font-size: 15px;
+    font-weight: 800;
+    letter-spacing: 1.5px;
+    color: var(--q-text);
+}
+
+/* ---- Sidebar ---------------------------------------------------------------- */
+
+.q-sidebar {
+    background-color: var(--q-sidebar);
+    border-right: 1px solid var(--q-line);
+    padding: 14px 10px;
+}
+
+.q-nav {
     background: transparent;
+    border: none;
+    box-shadow: none;
+    border-radius: 12px;
+    padding: 10px 12px;
+    color: var(--q-text-2);
+    font-weight: 600;
+    transition: background-color 120ms ease, color 120ms ease;
 }
 
-.device-id {
-    color: alpha(@theme_fg_color, 0.58);
-    background-color: alpha(@theme_fg_color, 0.08);
-    border-radius: 4px;
-    padding: 2px 5px;
+.q-nav .q-icon {
+    color: var(--q-text-3);
+}
+
+.q-nav:hover {
+    background-color: var(--q-card-hi);
+    color: var(--q-text);
+}
+
+.q-nav:checked {
+    background-color: var(--q-primary-soft);
+    color: var(--q-accent);
+}
+
+.q-nav:checked .q-icon {
+    color: var(--q-accent);
+}
+
+.q-daemon {
+    border-radius: 12px;
+    padding: 10px 12px;
+    background-color: var(--q-card);
+    border: 1px solid var(--q-line);
+}
+
+.q-daemon-dot {
+    min-width: 9px;
+    min-height: 9px;
+    border-radius: 999px;
+    background-color: var(--q-text-3);
+}
+
+.q-daemon-dot.ok {
+    background-color: var(--q-primary);
+    box-shadow: 0 0 0 3px var(--q-primary-soft);
+}
+
+.q-daemon-dot.bad {
+    background-color: var(--q-danger);
+    box-shadow: 0 0 0 3px var(--q-danger-soft);
+}
+
+/* ---- Typography -------------------------------------------------------------- */
+
+.q-page-title {
+    font-size: 26px;
+    font-weight: 800;
+    letter-spacing: -0.3px;
+}
+
+.q-page-subtitle {
+    color: var(--q-text-3);
+    font-size: 13.5px;
+}
+
+.q-section-title {
+    font-size: 11.5px;
+    font-weight: 800;
+    letter-spacing: 1.3px;
+    color: var(--q-text-3);
+}
+
+.q-title {
+    font-size: 16px;
+    font-weight: 700;
+}
+
+.q-body {
+    color: var(--q-text-2);
+}
+
+.q-dim {
+    color: var(--q-text-3);
+    font-size: 12.5px;
+}
+
+.q-mono {
     font-family: monospace;
-    font-size: 0.85em;
+    font-size: 12px;
+    color: var(--q-text-3);
 }
 
-.connected-device {
-    color: #57e389;
+/* ---- Cards ------------------------------------------------------------------ */
+
+.q-card {
+    background-color: var(--q-card);
+    border: 1px solid var(--q-line);
+    border-radius: 18px;
+    padding: 18px;
+    box-shadow: 0 1px 2px var(--q-shadow);
 }
 
-.status {
-    padding: 8px 10px;
-    border-radius: 8px;
-    background-color: alpha(@theme_selected_bg_color, 0.18);
+.q-card.connected {
+    border-color: var(--q-primary-line);
+}
+
+.q-avatar {
+    min-width: 46px;
+    min-height: 46px;
+    border-radius: 999px;
+    background-color: var(--q-card-hi);
+}
+
+.q-avatar .q-icon {
+    color: var(--q-text-2);
+}
+
+.q-card.connected .q-avatar {
+    background-color: var(--q-primary);
+}
+
+.q-card.connected .q-avatar .q-icon {
+    color: var(--q-on-primary);
+}
+
+.q-divider {
+    background-color: var(--q-line);
+    min-height: 1px;
+}
+
+.q-chip {
+    border-radius: 999px;
+    padding: 3px 10px;
+    font-size: 11.5px;
+    font-weight: 700;
+    background-color: var(--q-card-hi);
+    color: var(--q-text-3);
+}
+
+.q-chip.on {
+    background-color: var(--q-primary-soft);
+    color: var(--q-accent);
+}
+
+.q-empty {
+    padding: 36px 20px;
+}
+
+.q-empty .q-icon {
+    color: var(--q-text-3);
+}
+
+/* ---- Buttons ------------------------------------------------------------------ */
+
+window.quava button.q-button {
+    border-radius: 999px;
+    padding: 8px 18px;
+    font-weight: 700;
+    background-image: none;
+    background-color: var(--q-card-hi);
+    color: var(--q-text);
+    border: 1px solid var(--q-line);
+    box-shadow: none;
+    transition: background-color 120ms ease;
+}
+
+window.quava button.q-button:hover {
+    background-color: var(--q-line);
+}
+
+window.quava button.q-button.primary {
+    background-color: var(--q-primary);
+    border-color: transparent;
+    color: var(--q-on-primary);
+}
+
+window.quava button.q-button.primary:hover {
+    background-color: var(--q-primary);
+    box-shadow: 0 2px 10px var(--q-primary-soft);
+}
+
+window.quava button.q-button.danger {
+    background-color: var(--q-danger-soft);
+    border-color: transparent;
+    color: var(--q-danger);
+}
+
+window.quava button.q-button:disabled {
+    opacity: 0.45;
+}
+
+window.quava button.q-icon-button {
+    border-radius: 999px;
+    min-width: 38px;
+    min-height: 38px;
+    padding: 0;
+    background-image: none;
+    background-color: transparent;
+    border: none;
+    box-shadow: none;
+    transition: background-color 120ms ease;
+}
+
+window.quava button.q-icon-button:hover {
+    background-color: var(--q-card-hi);
+}
+
+window.quava button.q-icon-button:disabled {
+    opacity: 0.35;
+}
+
+window.quava button.q-icon-button.active .q-icon {
+    color: var(--q-accent);
+}
+
+window.quava button.q-icon-button.active {
+    background-color: var(--q-primary-soft);
+}
+
+window.quava button.q-play {
+    border-radius: 999px;
+    min-width: 62px;
+    min-height: 62px;
+    padding: 0;
+    background-image: none;
+    background-color: var(--q-primary);
+    border: none;
+    box-shadow: 0 6px 18px var(--q-primary-soft);
+}
+
+window.quava button.q-play .q-icon {
+    color: var(--q-on-primary);
+}
+
+window.quava button.q-play:hover {
+    background-color: var(--q-primary);
+    box-shadow: 0 8px 22px var(--q-primary-line);
+}
+
+/* ---- Phone status pills -------------------------------------------------------------- */
+
+.q-stat {
+    background-color: var(--q-card-hi);
+    border-radius: 999px;
+    padding: 6px 12px;
+    color: var(--q-text-2);
+    font-weight: 600;
+    font-size: 13px;
+}
+
+.q-stat .q-icon {
+    color: var(--q-text-2);
+}
+
+.q-stat.good,
+.q-stat.good .q-icon {
+    color: var(--q-accent);
+}
+
+.q-stat.good {
+    background-color: var(--q-primary-soft);
+}
+
+.q-stat.low,
+.q-stat.low .q-icon {
+    color: var(--q-danger);
+}
+
+.q-stat.low {
+    background-color: var(--q-danger-soft);
+}
+
+.q-stat.muted,
+.q-stat.muted .q-icon {
+    color: var(--q-text-3);
+}
+
+/* ---- Inputs ---------------------------------------------------------------------- */
+
+window.quava entry {
+    background-color: var(--q-field);
+    background-image: none;
+    color: var(--q-text);
+    border: 1px solid var(--q-line);
+    border-radius: 999px;
+    padding: 7px 14px;
+    min-height: 22px;
+    box-shadow: none;
+    outline: none;
+}
+
+window.quava entry:focus-within {
+    border-color: var(--q-primary-line);
+    box-shadow: 0 0 0 3px var(--q-primary-soft);
+}
+
+window.quava dropdown > button {
+    border-radius: 999px;
+    background-image: none;
+    background-color: var(--q-field);
+    border: 1px solid var(--q-line);
+    color: var(--q-text);
+    box-shadow: none;
+    padding: 5px 12px;
+}
+
+window.quava switch {
+    background-color: var(--q-line-strong);
+    background-image: none;
+    border: none;
+    border-radius: 999px;
+    box-shadow: none;
+    outline: none;
+}
+
+window.quava switch slider {
+    background-color: var(--q-text-3);
+    background-image: none;
+    border: none;
+    border-radius: 999px;
+    box-shadow: none;
+    min-width: 18px;
+    min-height: 18px;
+    margin: 3px;
+}
+
+window.quava switch:checked {
+    background-color: var(--q-primary);
+}
+
+window.quava switch:checked slider {
+    background-color: var(--q-on-primary);
+}
+
+/* ---- Sliders ---------------------------------------------------------------------- */
+
+window.quava scale trough {
+    background-color: var(--q-line-strong);
+    border: none;
+    border-radius: 999px;
+    min-height: 5px;
+    min-width: 5px;
+}
+
+window.quava scale highlight {
+    background-color: var(--q-primary);
+    border: none;
+    border-radius: 999px;
+}
+
+window.quava scale slider {
+    background-color: var(--q-primary);
+    background-image: none;
+    border: none;
+    border-radius: 999px;
+    min-width: 16px;
+    min-height: 16px;
+    margin: -6px;
+    box-shadow: 0 1px 4px var(--q-shadow);
+    transition: box-shadow 120ms ease;
+}
+
+window.quava scale:hover slider {
+    box-shadow: 0 0 0 6px var(--q-primary-soft);
+}
+
+/* ---- Media -------------------------------------------------------------------------- */
+
+.q-art {
+    border-radius: 24px;
+    background-color: var(--q-card-hi);
+    border: 1px solid var(--q-line);
+    box-shadow: 0 14px 34px var(--q-shadow);
+    min-width: 280px;
+    min-height: 280px;
+}
+
+.q-art .q-icon {
+    color: var(--q-text-3);
+}
+
+.q-track-title {
+    font-size: 22px;
+    font-weight: 800;
+    letter-spacing: -0.2px;
+}
+
+.q-time {
+    font-size: 12px;
+    font-variant-numeric: tabular-nums;
+    color: var(--q-text-3);
+}
+
+/* ---- Audio rows ---------------------------------------------------------------------- */
+
+.q-row {
+    background-color: var(--q-card);
+    border: 1px solid var(--q-line);
+    border-radius: 16px;
+    padding: 14px 16px;
+}
+
+.q-row.default {
+    border-color: var(--q-primary-line);
+}
+
+.q-radio {
+    min-width: 20px;
+    min-height: 20px;
+    border-radius: 999px;
+    border: 2px solid var(--q-line-strong);
+}
+
+.q-row.default .q-radio {
+    border-color: var(--q-primary);
+    background-color: var(--q-primary);
+    box-shadow: inset 0 0 0 4px var(--q-card);
+}
+
+/* ---- Refresh sweep ------------------------------------------------------------------ */
+
+.q-progress {
+    color: var(--q-primary);
+}
+
+/* ---- Toast ------------------------------------------------------------------------------ */
+
+.q-toast {
+    background-color: var(--q-text);
+    color: var(--q-bg);
+    border-radius: 999px;
+    padding: 10px 20px;
+    font-weight: 600;
+    box-shadow: 0 8px 28px var(--q-shadow);
+}
+
+/* ---- Scrollbars ----------------------------------------------------------------------------- */
+
+window.quava scrollbar slider {
+    background-color: var(--q-line-strong);
+    border-radius: 999px;
+    min-width: 6px;
+    min-height: 6px;
 }

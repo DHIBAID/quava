@@ -1,21 +1,30 @@
 package com.dhibaid.quava.ui
 
-
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Computer
+import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.LinkOff
 import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material.icons.filled.MusicNote
+import androidx.compose.material.icons.filled.Mouse
+import androidx.compose.material.icons.filled.Notifications
+import androidx.compose.material.icons.filled.NotificationsActive
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -28,29 +37,39 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalDrawerSheet
 import androidx.compose.material3.ModalNavigationDrawer
 import androidx.compose.material3.NavigationDrawerItem
+import androidx.compose.material3.NavigationDrawerItemDefaults
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.app.NotificationManagerCompat
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import androidx.compose.ui.graphics.Color
-
-import kotlinx.coroutines.launch
-
 import com.dhibaid.quava.PairingServer
-
+import com.dhibaid.quava.ui.theme.accentColor
+import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -60,291 +79,408 @@ fun HomeScreen(
     onSettingsClick: () -> Unit = {},
     onRemoteControlClick: () -> Unit = {},
     onMediaControlClick: () -> Unit = {},
-    onUnpairClick: () -> Unit = {},
-    onAboutClick: () -> Unit = {},
 ) {
     val state by server.state.collectAsStateWithLifecycle()
-
-    val drawerState = rememberDrawerState(
-        initialValue = DrawerValue.Closed
-    )
+    val context = LocalContext.current
+    val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
     val scope = rememberCoroutineScope()
+
+    var confirmUnpair by remember { mutableStateOf(false) }
+    var showAbout by remember { mutableStateOf(false) }
+
+    // Re-check notification access whenever the user comes back from system settings.
+    val lifecycleOwner = LocalLifecycleOwner.current
+    var resumeCount by remember { mutableIntStateOf(0) }
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) resumeCount++
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+    val notificationAccess = remember(resumeCount) {
+        NotificationManagerCompat.getEnabledListenerPackages(context).contains(context.packageName)
+    }
+
+    fun closeDrawerThen(action: () -> Unit) {
+        scope.launch { drawerState.close() }
+        action()
+    }
 
     ModalNavigationDrawer(
         drawerState = drawerState,
         drawerContent = {
             QuavaDrawer(
-                hostName = state.hostName ?: "Quava",
+                hostName = state.hostName,
                 connected = state.connected,
-                onClose = {
-                    scope.launch {
-                        drawerState.close()
-                    }
-                },
-                onSettingsClick = {
-                    scope.launch {
-                        drawerState.close()
-                    }
-                    onSettingsClick()
-                },
-                onUnpairClick = {
-                    scope.launch {
-                        drawerState.close()
-                    }
-                    onUnpairClick()
-                },
-                onAboutClick = {
-                    scope.launch {
-                        drawerState.close()
-                    }
-                    onAboutClick()
-                },
+                paired = state.paired,
+                onSettingsClick = { closeDrawerThen(onSettingsClick) },
+                onUnpairClick = { closeDrawerThen { confirmUnpair = true } },
+                onAboutClick = { closeDrawerThen { showAbout = true } },
             )
         },
     ) {
         Scaffold(
             topBar = {
-                QuavaTopBar(
-                    hostName = state.hostName ?: "Quava",
-                    connected = state.connected,
-                    onMenuClick = {
-                        scope.launch {
-                            drawerState.open()
+                TopAppBar(
+                    title = {
+                        Text(
+                            text = "Quava",
+                            fontWeight = FontWeight.ExtraBold,
+                        )
+                    },
+                    navigationIcon = {
+                        IconButton(onClick = { scope.launch { drawerState.open() } }) {
+                            Icon(Icons.Filled.Menu, contentDescription = "Menu")
                         }
                     },
                 )
             },
         ) { innerPadding ->
-
             Column(
                 modifier = Modifier
                     .fillMaxSize()
                     .padding(innerPadding)
-                    .padding(horizontal = 20.dp),
+                    .verticalScroll(rememberScrollState())
+                    .padding(horizontal = 20.dp, vertical = 8.dp),
                 verticalArrangement = Arrangement.spacedBy(16.dp),
             ) {
+                if (state.confirmationPending) {
+                    PairingRequestCard(
+                        peerName = state.pendingPeerName,
+                        pairingCode = state.pairingCode,
+                        onReject = server::rejectPairing,
+                        onConfirm = server::confirmPairing,
+                    )
+                } else {
+                    StatusCard(
+                        paired = state.paired,
+                        connected = state.connected,
+                        hostName = state.hostName,
+                        status = state.status,
+                    )
+                }
+
+                if (state.connected) {
+                    Text(
+                        text = "CONTROL YOUR COMPUTER",
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        letterSpacing = 1.sp,
+                        modifier = Modifier.padding(top = 4.dp, start = 4.dp),
+                    )
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    ) {
+                        FeatureTile(
+                            icon = Icons.Filled.MusicNote,
+                            title = "Media",
+                            caption = "Play, pause, skip",
+                            onClick = onMediaControlClick,
+                            modifier = Modifier.weight(1f),
+                        )
+                        FeatureTile(
+                            icon = Icons.Filled.Mouse,
+                            title = "Remote input",
+                            caption = "Touchpad & keyboard",
+                            onClick = onRemoteControlClick,
+                            modifier = Modifier.weight(1f),
+                        )
+                    }
+                } else if (!state.confirmationPending && !state.paired) {
+                    HowToPairCard()
+                }
+
+                if (!notificationAccess) {
+                    NotificationAccessCard(onEnable = onEnableNotificationAccess)
+                }
 
                 Spacer(Modifier.height(8.dp))
-
-                when {
-                    state.confirmationPending -> {
-                        PairingRequestCard(
-                            peerName = state.pendingPeerName,
-                            pairingCode = state.pairingCode,
-                            onReject = server::rejectPairing,
-                            onConfirm = server::confirmPairing,
-                        )
-                    }
-
-                    state.connected -> {
-                        ActiveSessionCard(
-                            status = state.status,
-                            onRemoteControlClick = onRemoteControlClick,
-                            onMediaControlClick = onMediaControlClick,
-                        )
-                    }
-
-                    state.paired -> {
-                        PairedOfflineCard(
-                            status = state.status,
-                        )
-                    }
-
-                    else -> {
-                        WaitingCard()
-                    }
-                }
-
-                OutlinedButton(
-                    onClick = onEnableNotificationAccess,
-                    modifier = Modifier.fillMaxWidth(),
-                ) {
-                    Text("Enable notification forwarding")
-                }
-
-                Spacer(Modifier.weight(1f))
-
-                Text(
-                    text = "Quava",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(bottom = 16.dp),
-                    textAlign = TextAlign.Center,
-                )
             }
         }
     }
-}
 
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun QuavaTopBar(
-    hostName: String,
-    connected: Boolean,
-    onMenuClick: () -> Unit,
-) {
-    TopAppBar(
-        title = {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
+    if (confirmUnpair) {
+        AlertDialog(
+            onDismissRequest = { confirmUnpair = false },
+            title = { Text("Unpair ${state.hostName ?: "this computer"}?") },
+            text = {
                 Text(
-                    text = hostName,
-                    fontWeight = FontWeight.SemiBold,
+                    "Your phone and the computer will both forget each other. " +
+                            "You'll need to pair again to reconnect."
                 )
-
-                Spacer(Modifier.size(10.dp))
-
-                ConnectionIndicator(
-                    connected = connected,
-                )
-            }
-        },
-        navigationIcon = {
-            IconButton(
-                onClick = onMenuClick,
-            ) {
-                Icon(
-                    imageVector = Icons.Default.Menu,
-                    contentDescription = "Menu",
-                )
-            }
-        },
-    )
-}
-
-@Composable
-private fun ConnectionIndicator(
-    connected: Boolean,
-) {
-    val color = if (connected) {
-        Color(0xFF4CAF50) // Green color for connected state
-    } else {
-        Color(0xFF9E9E9E) // Gray color for disconnected state
-    }
-
-    Row(
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Spacer(
-            modifier = Modifier
-                .size(9.dp)
-                .clip(CircleShape)
-                .background(color)
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        confirmUnpair = false
+                        server.unpair()
+                    },
+                ) {
+                    Text("Unpair", color = MaterialTheme.colorScheme.error)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmUnpair = false }) { Text("Cancel") }
+            },
         )
+    }
 
-        Spacer(Modifier.size(6.dp))
-
+    if (showAbout) {
+        val version = remember {
+            runCatching {
+                context.packageManager.getPackageInfo(context.packageName, 0).versionName
+            }.getOrNull() ?: "unknown"
+        }
+        AlertDialog(
+            onDismissRequest = { showAbout = false },
+            title = { Text("Quava") },
+            text = { Text("Version $version\n\nConnect your phone to your Linux computer.") },
+            confirmButton = {
+                TextButton(onClick = { showAbout = false }) { Text("Close") }
+            },
+        )
     }
 }
 
+// ---- Cards ---------------------------------------------------------------------------
+
 @Composable
-private fun QuavaDrawer(
-    hostName: String,
+private fun StatusCard(
+    paired: Boolean,
     connected: Boolean,
-    onClose: () -> Unit,
-    onSettingsClick: () -> Unit,
-    onUnpairClick: () -> Unit,
-    onAboutClick: () -> Unit,
+    hostName: String?,
+    status: String,
 ) {
-    ModalDrawerSheet(
-        modifier = Modifier.fillMaxHeight(),
+    val colors = MaterialTheme.colorScheme
+
+    val headline = when {
+        connected -> hostName ?: "Connected"
+        paired -> hostName ?: "Paired computer"
+        else -> "Not paired yet"
+    }
+    val label = when {
+        connected -> "Connected"
+        paired -> "Offline"
+        else -> "Waiting"
+    }
+
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(28.dp),
+        colors = CardDefaults.cardColors(containerColor = colors.surfaceContainerLow),
     ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(20.dp),
+                .padding(22.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
-            Text(
-                text = hostName,
-                style = MaterialTheme.typography.headlineSmall,
-                fontWeight = FontWeight.SemiBold,
-            )
-
-            Spacer(Modifier.height(6.dp))
-
             Row(
                 verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(16.dp),
             ) {
-                Spacer(
+                Box(
                     modifier = Modifier
-                        .size(8.dp)
+                        .size(56.dp)
                         .clip(CircleShape)
-                        .background(
-                            if (connected) {
-                                MaterialTheme.colorScheme.primary
-                            } else {
-                                MaterialTheme.colorScheme.outline
-                            }
-                        )
-                )
+                        .background(if (connected) colors.primary else colors.surfaceContainerHighest),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.Computer,
+                        contentDescription = null,
+                        tint = if (connected) colors.onPrimary else colors.onSurfaceVariant,
+                        modifier = Modifier.size(28.dp),
+                    )
+                }
 
-                Spacer(Modifier.size(8.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = headline,
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.Bold,
+                        maxLines = 1,
+                    )
+                    Spacer(Modifier.height(6.dp))
+                    StatusPill(label = label, active = connected)
+                }
+            }
 
+            HorizontalDivider(color = colors.outlineVariant.copy(alpha = 0.4f))
+
+            Text(
+                text = status,
+                style = MaterialTheme.typography.bodyMedium,
+                color = colors.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+@Composable
+private fun StatusPill(label: String, active: Boolean) {
+    val colors = MaterialTheme.colorScheme
+
+    Surface(
+        shape = CircleShape,
+        color = if (active) colors.primary.copy(alpha = 0.18f) else colors.surfaceContainerHighest,
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 5.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(8.dp)
+                    .clip(CircleShape)
+                    .background(if (active) colors.primary else colors.outline),
+            )
+            Spacer(Modifier.size(8.dp))
+            Text(
+                text = label,
+                style = MaterialTheme.typography.labelLarge,
+                fontWeight = FontWeight.SemiBold,
+                color = if (active) accentColor() else colors.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+@Composable
+private fun FeatureTile(
+    icon: ImageVector,
+    title: String,
+    caption: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val colors = MaterialTheme.colorScheme
+
+    Card(
+        onClick = onClick,
+        modifier = modifier,
+        shape = RoundedCornerShape(24.dp),
+        colors = CardDefaults.cardColors(containerColor = colors.surfaceContainerHigh),
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(18.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp),
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(44.dp)
+                    .clip(CircleShape)
+                    .background(colors.primary.copy(alpha = 0.18f)),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(icon, contentDescription = null, tint = accentColor())
+            }
+
+            Column {
                 Text(
-                    text = if (connected) "Connected" else "Offline",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    text = title,
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                )
+                Text(
+                    text = caption,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = colors.onSurfaceVariant,
                 )
             }
         }
+    }
+}
 
-        HorizontalDivider()
+@Composable
+private fun NotificationAccessCard(onEnable: () -> Unit) {
+    val colors = MaterialTheme.colorScheme
 
-        Spacer(Modifier.height(8.dp))
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(24.dp),
+        colors = CardDefaults.cardColors(containerColor = colors.surfaceContainerLow),
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(18.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(14.dp),
+        ) {
+            Icon(
+                imageVector = Icons.Filled.NotificationsActive,
+                contentDescription = null,
+                tint = colors.tertiary,
+                modifier = Modifier.size(28.dp),
+            )
 
-        NavigationDrawerItem(
-            label = { Text("Files") },
-            selected = false,
-            onClick = {
-                // TODO
-                onClose()
-            },
-        )
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = "Show phone notifications on your computer",
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                Spacer(Modifier.height(2.dp))
+                Text(
+                    text = "Quava needs notification access to forward them.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = colors.onSurfaceVariant,
+                )
+            }
 
-        NavigationDrawerItem(
-            label = { Text("Screen Sharing") },
-            selected = false,
-            onClick = {
-                // TODO
-                onClose()
-            },
-        )
+            OutlinedButton(onClick = onEnable) { Text("Enable") }
+        }
+    }
+}
 
-        NavigationDrawerItem(
-            label = { Text("Terminal") },
-            selected = false,
-            onClick = {
-                // TODO
-                onClose()
-            },
-        )
+@Composable
+private fun HowToPairCard() {
+    val colors = MaterialTheme.colorScheme
 
-        Spacer(Modifier.height(8.dp))
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(24.dp),
+        colors = CardDefaults.cardColors(containerColor = colors.surfaceContainerLow),
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(22.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Text(
+                text = "Pair with your computer",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold,
+            )
 
-        HorizontalDivider()
-
-        Spacer(Modifier.height(8.dp))
-
-        NavigationDrawerItem(
-            label = { Text("Settings") },
-            selected = false,
-            onClick = onSettingsClick,
-        )
-
-        NavigationDrawerItem(
-            label = { Text("Unpair") },
-            selected = false,
-            onClick = onUnpairClick,
-        )
-
-        NavigationDrawerItem(
-            label = { Text("About Quava") },
-            selected = false,
-            onClick = onAboutClick,
-        )
+            listOf(
+                "Keep Quava open on this phone.",
+                "On your computer, open Quava and choose Find devices.",
+                "Pick this phone, then check that the codes match.",
+            ).forEachIndexed { index, step ->
+                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Text(
+                        text = "${index + 1}",
+                        style = MaterialTheme.typography.labelLarge,
+                        fontWeight = FontWeight.Bold,
+                        color = accentColor(),
+                    )
+                    Text(
+                        text = step,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = colors.onSurfaceVariant,
+                    )
+                }
+            }
+        }
     }
 }
 
@@ -355,14 +491,12 @@ private fun PairingRequestCard(
     onReject: () -> Unit,
     onConfirm: () -> Unit,
 ) {
-    val color = MaterialTheme.colorScheme
+    val colors = MaterialTheme.colorScheme
 
     Card(
         modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(24.dp),
-        colors = CardDefaults.cardColors(
-            containerColor = color.primaryContainer,
-        ),
+        shape = RoundedCornerShape(28.dp),
+        colors = CardDefaults.cardColors(containerColor = colors.surfaceContainerHigh),
     ) {
         Column(
             modifier = Modifier
@@ -372,70 +506,53 @@ private fun PairingRequestCard(
         ) {
             Text(
                 text = "Pairing request",
-                style = MaterialTheme.typography.headlineSmall,
-                fontWeight = FontWeight.SemiBold,
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.Bold,
             )
 
-            Spacer(Modifier.height(8.dp))
+            Spacer(Modifier.height(4.dp))
 
             Text(
                 text = peerName,
-                style = MaterialTheme.typography.titleMedium,
+                style = MaterialTheme.typography.bodyLarge,
+                color = colors.onSurfaceVariant,
             )
 
             Spacer(Modifier.height(20.dp))
 
-            Text(
-                text = "Verify this code",
-                style = MaterialTheme.typography.bodyMedium,
-                color = color.onPrimaryContainer.copy(alpha = 0.75f),
-            )
-
-            Spacer(Modifier.height(8.dp))
-
             Surface(
-                shape = RoundedCornerShape(16.dp),
-                color = color.surface,
+                shape = RoundedCornerShape(20.dp),
+                color = colors.primary.copy(alpha = 0.16f),
             ) {
                 Text(
                     text = pairingCode,
-                    modifier = Modifier.padding(
-                        horizontal = 28.dp,
-                        vertical = 16.dp,
-                    ),
-                    fontSize = 40.sp,
-                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.padding(horizontal = 28.dp, vertical = 16.dp),
+                    fontSize = 38.sp,
+                    fontWeight = FontWeight.ExtraBold,
                     letterSpacing = 4.sp,
-                    color = color.onSurface,
+                    color = accentColor(),
                 )
             }
 
-            Spacer(Modifier.height(12.dp))
+            Spacer(Modifier.height(14.dp))
 
             Text(
-                text = "Make sure this code matches the one shown on your other device.",
+                text = "Make sure this code matches the one on your computer.",
                 style = MaterialTheme.typography.bodySmall,
-                color = color.onPrimaryContainer.copy(alpha = 0.75f),
+                color = colors.onSurfaceVariant,
                 textAlign = TextAlign.Center,
             )
 
-            Spacer(Modifier.height(24.dp))
+            Spacer(Modifier.height(22.dp))
 
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
             ) {
-                OutlinedButton(
-                    onClick = onReject,
-                    modifier = Modifier.weight(1f),
-                ) {
+                OutlinedButton(onClick = onReject, modifier = Modifier.weight(1f)) {
                     Text("Reject")
                 }
-
-                Button(
-                    onClick = onConfirm,
-                    modifier = Modifier.weight(1f),
-                ) {
+                Button(onClick = onConfirm, modifier = Modifier.weight(1f)) {
                     Text("Confirm")
                 }
             }
@@ -443,160 +560,78 @@ private fun PairingRequestCard(
     }
 }
 
+// ---- Drawer ---------------------------------------------------------------------------
+
 @Composable
-private fun ActiveSessionCard(
-    status: String,
-    onRemoteControlClick: () -> Unit,
-    onMediaControlClick: () -> Unit,
+private fun QuavaDrawer(
+    hostName: String?,
+    connected: Boolean,
+    paired: Boolean,
+    onSettingsClick: () -> Unit,
+    onUnpairClick: () -> Unit,
+    onAboutClick: () -> Unit,
 ) {
-    val color = MaterialTheme.colorScheme
+    val colors = MaterialTheme.colorScheme
 
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(24.dp),
-    ) {
-        Column(
-            modifier = Modifier.padding(24.dp),
-        ) {
-            Text(
-                text = "Active session",
-                style = MaterialTheme.typography.titleLarge,
-                fontWeight = FontWeight.SemiBold,
-            )
-
-            Spacer(Modifier.height(16.dp))
-
-            HorizontalDivider()
-
-            Spacer(Modifier.height(16.dp))
-
-            Text(
-                text = "Connected to your device.",
-                style = MaterialTheme.typography.bodyLarge,
-            )
-
-            Spacer(Modifier.height(6.dp))
-
-            Text(
-                text = status,
-                style = MaterialTheme.typography.bodyMedium,
-                color = color.onSurfaceVariant,
-            )
-
-            Spacer(Modifier.height(20.dp))
-
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-            ) {
-                SessionAction(
-                    title = "Files",
-                    modifier = Modifier.weight(1f),
-                )
-
-                SessionAction(
-                    title = "Remote Input",
-                    onClick = onRemoteControlClick,
-                    modifier = Modifier.weight(1f),
-                )
-            }
-
-            Spacer(Modifier.height(12.dp))
-
-            SessionAction(
-                title = "Host Media",
-                onClick = onMediaControlClick,
-                modifier = Modifier.fillMaxWidth(),
-            )
-        }
-    }
-}
-
-@Composable
-private fun SessionAction(
-    title: String,
-    onClick: () -> Unit = {},
-    modifier: Modifier = Modifier,
-) {
-    OutlinedButton(
-        onClick = onClick,
-        modifier = modifier,
-    ) {
-        Text(title)
-    }
-}
-
-@Composable
-private fun PairedOfflineCard(
-    status: String,
-) {
-    val color = MaterialTheme.colorScheme
-
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(24.dp),
-        colors = CardDefaults.cardColors(
-            containerColor = color.surfaceContainerLow,
-        ),
-    ) {
-        Column(
-            modifier = Modifier.padding(24.dp),
-        ) {
-            Text(
-                text = "Paired device",
-                style = MaterialTheme.typography.titleLarge,
-                fontWeight = FontWeight.SemiBold,
-            )
-
-            Spacer(Modifier.height(8.dp))
-
-            Text(
-                text = "The device is paired but there is currently no active session.",
-                style = MaterialTheme.typography.bodyMedium,
-                color = color.onSurfaceVariant,
-            )
-
-            Spacer(Modifier.height(12.dp))
-
-            Text(
-                text = status,
-                style = MaterialTheme.typography.bodySmall,
-                color = color.onSurfaceVariant,
-            )
-        }
-    }
-}
-
-@Composable
-private fun WaitingCard() {
-    val color = MaterialTheme.colorScheme
-
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(24.dp),
-        colors = CardDefaults.cardColors(
-            containerColor = color.surfaceContainerLow,
-        ),
-    ) {
+    ModalDrawerSheet {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(24.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
+                .padding(horizontal = 24.dp, vertical = 28.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
             Text(
-                text = "Waiting for a device",
-                style = MaterialTheme.typography.titleLarge,
-                fontWeight = FontWeight.SemiBold,
+                text = hostName ?: "Quava",
+                style = MaterialTheme.typography.headlineSmall,
+                fontWeight = FontWeight.Bold,
+                maxLines = 1,
             )
+            StatusPill(
+                label = when {
+                    connected -> "Connected"
+                    paired -> "Offline"
+                    else -> "Not paired"
+                },
+                active = connected,
+            )
+        }
 
+        HorizontalDivider(color = colors.outlineVariant.copy(alpha = 0.4f))
+        Spacer(Modifier.height(8.dp))
+
+        NavigationDrawerItem(
+            icon = { Icon(Icons.Filled.Notifications, contentDescription = null) },
+            label = { Text("Notification settings") },
+            selected = false,
+            onClick = onSettingsClick,
+            modifier = Modifier.padding(NavigationDrawerItemDefaults.ItemPadding),
+        )
+
+        NavigationDrawerItem(
+            icon = { Icon(Icons.Filled.Info, contentDescription = null) },
+            label = { Text("About Quava") },
+            selected = false,
+            onClick = onAboutClick,
+            modifier = Modifier.padding(NavigationDrawerItemDefaults.ItemPadding),
+        )
+
+        if (paired) {
+            Spacer(Modifier.height(8.dp))
+            HorizontalDivider(color = colors.outlineVariant.copy(alpha = 0.4f))
             Spacer(Modifier.height(8.dp))
 
-            Text(
-                text = "Keep Quava open while another device discovers and pairs with this one.",
-                style = MaterialTheme.typography.bodyMedium,
-                color = color.onSurfaceVariant,
-                textAlign = TextAlign.Center,
+            NavigationDrawerItem(
+                icon = {
+                    Icon(
+                        Icons.Filled.LinkOff,
+                        contentDescription = null,
+                        tint = colors.error,
+                    )
+                },
+                label = { Text("Unpair", color = colors.error) },
+                selected = false,
+                onClick = onUnpairClick,
+                modifier = Modifier.padding(NavigationDrawerItemDefaults.ItemPadding),
             )
         }
     }

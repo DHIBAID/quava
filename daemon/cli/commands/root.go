@@ -7,6 +7,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
+// Root is the `quava` command.
 var Root = &cobra.Command{
 	Use:   "quava",
 	Short: "Quava is an Android - Linux bridge.",
@@ -15,14 +16,16 @@ var Root = &cobra.Command{
 	SilenceUsage:  true,
 	SilenceErrors: true,
 
-	Run: func(command *cobra.Command, args []string) {
+	Run: func(_ *cobra.Command, args []string) {
 		fmt.Println("Quava works.")
 	},
 }
 
+// Execute runs the command line. Every failure ends up here, so the format is
+// the same everywhere: "quava: <message>" on standard error, exit status 1.
 func Execute() {
 	if err := Root.Execute(); err != nil {
-		fmt.Fprintln(os.Stderr, err)
+		fmt.Fprintln(os.Stderr, "quava:", err)
 		os.Exit(1)
 	}
 }

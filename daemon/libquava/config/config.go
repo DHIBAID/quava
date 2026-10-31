@@ -35,6 +35,9 @@ type file struct {
 	Devices          map[string]models.PairResult         `yaml:"devices,omitempty"`
 	NotificationSync map[string]NotificationSyncDirection `yaml:"notification_sync,omitempty"`
 	ClipboardSync    map[string]bool                      `yaml:"clipboard_sync,omitempty"`
+	InputAuto        map[string]bool                      `yaml:"input_auto,omitempty"`
+	AutoConnectOff   map[string]bool                      `yaml:"auto_connect_off,omitempty"`
+	NotifFilters     models.NotificationFilters           `yaml:"notification_filters,omitempty"`
 }
 
 // NotificationSyncDirection controls notification flow for one paired device.
@@ -48,9 +51,6 @@ const (
 	NotificationSyncToClient NotificationSyncDirection = "toClient"
 	NotificationSyncToHost   NotificationSyncDirection = "toHost"
 )
-
-// Path returns the YAML configuration path.
-func (s *Store) Path() string { return s.path }
 
 // Dir returns the directory containing the YAML configuration file.
 func (s *Store) Dir() string { return s.dir }
@@ -95,6 +95,12 @@ func Open(storageDir string) (*Store, error) {
 		}
 		if store.data.ClipboardSync == nil {
 			store.data.ClipboardSync = map[string]bool{}
+		}
+		if store.data.InputAuto == nil {
+			store.data.InputAuto = map[string]bool{}
+		}
+		if store.data.AutoConnectOff == nil {
+			store.data.AutoConnectOff = map[string]bool{}
 		}
 
 		return store, nil
@@ -151,23 +157,6 @@ func (s *Store) Device(deviceID string) (models.PairResult, bool) {
 	return cloneDevice(device), ok
 }
 
-// Lookup finds a device by exact device ID or its stored display name.
-func (s *Store) Lookup(query string) (models.PairResult, bool) {
-	if device, ok := s.Device(query); ok {
-		return device, true
-	}
-
-	query = strings.TrimSpace(query)
-
-	for _, device := range s.Devices() {
-		if device.PeerDeviceName == query {
-			return device, true
-		}
-	}
-
-	return models.PairResult{}, false
-}
-
 // NotificationSync returns the notification direction for deviceID. Paired
 // devices without an explicit setting receive Android-to-Linux sync only.
 func (s *Store) NotificationSync(deviceID string) NotificationSyncDirection {
@@ -180,6 +169,45 @@ func (s *Store) NotificationSync(deviceID string) NotificationSyncDirection {
 		return direction
 	}
 	return NotificationSyncToHost
+}
+
+// NotificationFilters returns the Android-notification filter rules. They are
+// read from config.yaml when the daemon starts.
+func (s *Store) NotificationFilters() models.NotificationFilters {
+	if s == nil {
+		return models.NotificationFilters{}
+	}
+	return s.data.NotifFilters
+}
+
+// SetNotificationFilters validates and replaces the Android-notification
+// filter rules. Call Save to persist them.
+func (s *Store) SetNotificationFilters(filters models.NotificationFilters) error {
+	clean := func(items []string) []string {
+		var out []string
+		seen := map[string]bool{}
+		for _, item := range items {
+			item = strings.TrimSpace(item)
+			key := strings.ToLower(item)
+			if item == "" || seen[key] {
+				continue
+			}
+			seen[key] = true
+			out = append(out, item)
+		}
+		return out
+	}
+	filters.MutedApps = clean(filters.MutedApps)
+	filters.OnlyApps = clean(filters.OnlyApps)
+	filters.MutedCategories = clean(filters.MutedCategories)
+	filters.Silent = strings.ToLower(strings.TrimSpace(filters.Silent))
+	switch filters.Silent {
+	case "", "drop", "preserve", "normal":
+	default:
+		return fmt.Errorf("config: invalid silent policy %q (use drop, preserve, or normal)", filters.Silent)
+	}
+	s.data.NotifFilters = filters
+	return nil
 }
 
 // SetNotificationSync persists a notification direction for one paired device.
@@ -230,6 +258,75 @@ func (s *Store) SetClipboardSync(deviceID string, enabled bool) error {
 		s.data.ClipboardSync = map[string]bool{}
 	}
 	s.data.ClipboardSync[deviceID] = enabled
+	return nil
+}
+
+// RemoveDevice forgets a paired device and every per-device setting for it.
+// Call Save to persist the change.
+func (s *Store) RemoveDevice(deviceID string) error {
+	deviceID = strings.ToLower(strings.TrimSpace(deviceID))
+	if _, ok := s.data.Devices[deviceID]; !ok {
+		return fmt.Errorf("config: device %q is not paired", deviceID)
+	}
+
+	delete(s.data.Devices, deviceID)
+	delete(s.data.NotificationSync, deviceID)
+	delete(s.data.ClipboardSync, deviceID)
+	delete(s.data.InputAuto, deviceID)
+	delete(s.data.AutoConnectOff, deviceID)
+	return nil
+}
+
+// AutoConnect reports whether the daemon connects to the peer on its own,
+// at startup and whenever the peer appears on the network. It defaults to true.
+func (s *Store) AutoConnect(deviceID string) bool {
+	if s == nil {
+		return false
+	}
+	return !s.data.AutoConnectOff[strings.ToLower(strings.TrimSpace(deviceID))]
+}
+
+// SetAutoConnect turns automatic connecting on or off for a paired peer. Call
+// Save to persist it.
+func (s *Store) SetAutoConnect(deviceID string, enabled bool) error {
+	deviceID = strings.ToLower(strings.TrimSpace(deviceID))
+	if _, ok := s.data.Devices[deviceID]; !ok {
+		return fmt.Errorf("config: device %q is not paired", deviceID)
+	}
+	if s.data.AutoConnectOff == nil {
+		s.data.AutoConnectOff = map[string]bool{}
+	}
+	if enabled {
+		delete(s.data.AutoConnectOff, deviceID)
+	} else {
+		s.data.AutoConnectOff[deviceID] = true
+	}
+	return nil
+}
+
+// InputAuto reports whether remote input is switched on automatically each time
+// the peer connects. It defaults to false: a new device must be allowed once.
+func (s *Store) InputAuto(deviceID string) bool {
+	if s == nil {
+		return false
+	}
+	return s.data.InputAuto[strings.ToLower(strings.TrimSpace(deviceID))]
+}
+
+// SetInputAuto remembers whether remote input should turn on automatically
+// whenever the peer connects. Call Save to persist it.
+func (s *Store) SetInputAuto(deviceID string, enabled bool) error {
+	deviceID = strings.ToLower(strings.TrimSpace(deviceID))
+	if deviceID == "" {
+		return errors.New("config: paired device has no device ID")
+	}
+	if _, ok := s.data.Devices[deviceID]; !ok {
+		return fmt.Errorf("config: device %q is not paired", deviceID)
+	}
+	if s.data.InputAuto == nil {
+		s.data.InputAuto = map[string]bool{}
+	}
+	s.data.InputAuto[deviceID] = enabled
 	return nil
 }
 
@@ -357,6 +454,19 @@ func validateConfig(data file) error {
 		}
 		if _, ok := data.Devices[id]; !ok {
 			return fmt.Errorf("clipboard sync setting references unknown device %q", id)
+		}
+	}
+	for id := range data.AutoConnectOff {
+		if strings.ToLower(strings.TrimSpace(id)) != id {
+			return fmt.Errorf("invalid auto-connect setting for device %q", id)
+		}
+	}
+	for id := range data.InputAuto {
+		if strings.ToLower(strings.TrimSpace(id)) != id {
+			return fmt.Errorf("invalid remote input setting for device %q", id)
+		}
+		if _, ok := data.Devices[id]; !ok {
+			return fmt.Errorf("remote input setting references unknown device %q", id)
 		}
 	}
 	return nil

@@ -1,8 +1,31 @@
 #include <string.h>
 
-#include "../includes/commands.h"
+#include "../includes/app.h"
 
-void pairing_answer(GObject* source, GAsyncResult* result, gpointer user_data) {
+typedef struct {
+	App* app;
+	gchar* peer;
+	gchar* name;
+	gchar* code;
+	GMutex mutex;
+	GCond condition;
+	gboolean answered;
+	gboolean accepted;
+} Pairing;
+
+static void pairing_free(Pairing* pairing) {
+	if (pairing == NULL)
+		return;
+
+	g_free(pairing->peer);
+	g_free(pairing->name);
+	g_free(pairing->code);
+	g_mutex_clear(&pairing->mutex);
+	g_cond_clear(&pairing->condition);
+	g_free(pairing);
+}
+
+static void pairing_answer(GObject* source, GAsyncResult* result, gpointer user_data) {
 	Pairing* pairing = user_data;
 	GError* error = NULL;
 	int choice = gtk_alert_dialog_choose_finish(GTK_ALERT_DIALOG(source), result, &error);
@@ -19,11 +42,12 @@ void pairing_answer(GObject* source, GAsyncResult* result, gpointer user_data) {
 	g_mutex_unlock(&pairing->mutex);
 }
 
-gboolean show_pairing_code(gpointer user_data) {
+static gboolean show_pairing_code(gpointer user_data) {
 	Pairing* pairing = user_data;
-	GtkAlertDialog* dialog = gtk_alert_dialog_new("%s", pairing->code);
+	GtkAlertDialog* dialog = gtk_alert_dialog_new("Pair with %s?", pairing->name);
 	const gchar* buttons[] = {"Cancel", "Pair", NULL};
 
+	gtk_alert_dialog_set_detail(dialog, pairing->code);
 	gtk_alert_dialog_set_buttons(dialog, buttons);
 	gtk_alert_dialog_set_cancel_button(dialog, 0);
 	gtk_alert_dialog_set_default_button(dialog, 1);
@@ -33,7 +57,7 @@ gboolean show_pairing_code(gpointer user_data) {
 	return G_SOURCE_REMOVE;
 }
 
-void pairing_worker(GTask* task, gpointer source, gpointer task_data, GCancellable* cancellable) {
+static void pairing_worker(GTask* task, gpointer source, gpointer task_data, GCancellable* cancellable) {
 	(void)source;
 	(void)cancellable;
 
@@ -49,8 +73,7 @@ void pairing_worker(GTask* task, gpointer source, gpointer task_data, GCancellab
 	}
 	quava_ipc_reply_free(reply);
 
-	reply = quava_ipc_read_reply(
-		g_io_stream_get_input_stream(G_IO_STREAM(connection)));
+	reply = quava_ipc_read_reply(g_io_stream_get_input_stream(G_IO_STREAM(connection)));
 	const gchar* error = quava_ipc_error(reply);
 
 	if (error != NULL ||
@@ -61,34 +84,32 @@ void pairing_worker(GTask* task, gpointer source, gpointer task_data, GCancellab
 		return;
 	}
 
-	guint64 code = json_object_get_int_member(reply->object, "code");
-	const gchar* name =
-		json_object_has_member(reply->object, "peer_name")
-			? json_object_get_string_member(reply->object, "peer_name")
-			: pairing->peer;
+	guint64 code = (guint64)json_object_get_int_member(reply->object, "code");
+	const gchar* peer_name = json_object_has_member(reply->object, "peer_name")
+								 ? json_object_get_string_member(reply->object, "peer_name")
+								 : pairing->name;
 
+	g_free(pairing->name);
+	pairing->name = g_strdup(peer_name);
 	pairing->code = g_strdup_printf(
-		"Verify this code on %s:\n\n%03" G_GUINT64_FORMAT
-		" %03" G_GUINT64_FORMAT "\n\nThen confirm pairing.",
-		name,
+		"Check that this code matches the one on %s:\n\n%03" G_GUINT64_FORMAT " %03" G_GUINT64_FORMAT,
+		peer_name,
 		code / 1000,
 		code % 1000);
 
 	quava_ipc_reply_free(reply);
 
-	/* Always dispatch GTK work to the main loop, never from this worker. */
+	/* GTK work always goes through the main loop, never from this worker. */
 	g_idle_add(show_pairing_code, pairing);
 
 	g_mutex_lock(&pairing->mutex);
 	while (!pairing->answered)
 		g_cond_wait(&pairing->condition, &pairing->mutex);
-
 	gboolean accepted = pairing->accepted;
 	g_mutex_unlock(&pairing->mutex);
 
 	json = quava_ipc_request_json("confirm_pairing", NULL, 0, accepted, TRUE);
-	GOutputStream* output =
-		g_io_stream_get_output_stream(G_IO_STREAM(connection));
+	GOutputStream* output = g_io_stream_get_output_stream(G_IO_STREAM(connection));
 	gchar* line = g_strconcat(json, "\n", NULL);
 	g_free(json);
 
@@ -97,7 +118,7 @@ void pairing_worker(GTask* task, gpointer source, gpointer task_data, GCancellab
 
 	if (!g_output_stream_write_all(output, line, strlen(line), &written, NULL, &write_error)) {
 		QuavaIpcReply* failed = g_new0(QuavaIpcReply, 1);
-		failed->error = g_strdup_printf("Cannot confirm pairing: %s", write_error->message);
+		failed->error = g_strdup_printf("cannot confirm pairing: %s", write_error->message);
 		g_clear_error(&write_error);
 		g_free(line);
 		g_object_unref(connection);
@@ -112,7 +133,7 @@ void pairing_worker(GTask* task, gpointer source, gpointer task_data, GCancellab
 	g_task_return_pointer(task, reply, (GDestroyNotify)quava_ipc_reply_free);
 }
 
-void pairing_done(GObject* source, GAsyncResult* result, gpointer user_data) {
+static void pairing_done(GObject* source, GAsyncResult* result, gpointer user_data) {
 	(void)source;
 
 	App* app = user_data;
@@ -120,29 +141,25 @@ void pairing_done(GObject* source, GAsyncResult* result, gpointer user_data) {
 	const gchar* error = quava_ipc_error(reply);
 
 	if (error != NULL) {
-		status(app, error);
+		app_toast(app, error);
 	} else {
-		status(app, "Pairing completed");
-		start_request(app, REQUEST_DEVICES, "devices", NULL, 0);
+		app_toast(app, "Paired. You can connect now.");
+		devices_refresh_now();
 	}
 
 	quava_ipc_reply_free(reply);
 }
 
-void pair_clicked(GtkButton* button_widget, App* app) {
-	(void)button_widget;
-
-	const gchar* peer = selected_peer(app);
-	if (peer == NULL)
-		return;
-
+void quava_pair(App* app, const gchar* peer_id, const gchar* name) {
 	Pairing* pairing = g_new0(Pairing, 1);
+
 	pairing->app = app;
-	pairing->peer = g_strdup(peer);
+	pairing->peer = g_strdup(peer_id);
+	pairing->name = g_strdup(name != NULL ? name : "this device");
 	g_mutex_init(&pairing->mutex);
 	g_cond_init(&pairing->condition);
 
-	status(app, "Waiting for pairing code…");
+	app_toast(app, "Waiting for the phone to show a pairing code…");
 
 	GTask* task = g_task_new(NULL, NULL, pairing_done, app);
 	g_task_set_task_data(task, pairing, (GDestroyNotify)pairing_free);

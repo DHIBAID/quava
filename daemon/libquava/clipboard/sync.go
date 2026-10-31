@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"libquava/models"
+	"libquava/protocol"
 
 	clip "golang.design/x/clipboard"
 )
@@ -94,7 +95,7 @@ func (c *ClipboardService) RememberContent(content models.ClipboardContent) {
 }
 
 func (c *ClipboardService) PushClipboardContent(ctx context.Context, content models.ClipboardContent) error {
-	if len(content.Content) > 48*1024 {
+	if len(content.Content) > protocol.MaxClipboardBytes {
 		return errors.New("clipboard: content exceeds 48 KiB sync limit")
 	}
 	c.pendingMutex.Lock()

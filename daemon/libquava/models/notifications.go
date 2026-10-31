@@ -24,6 +24,25 @@ type AndroidNotificationContent struct {
 	Body     string
 	IconData []byte
 	Actions  []AndroidNotificationAction
+	Category string // Android Notification.category, may be empty
+	Silent   bool   // Android marked it low-importance / non-alerting
+}
+
+// NotificationFilters selects which Android notifications are rendered on the
+// host. Matching is case-insensitive. Configured under notification_filters
+// in config.yaml.
+type NotificationFilters struct {
+	// MutedApps never render, matched against the Android app label.
+	MutedApps []string `yaml:"muted_apps,omitempty"`
+	// OnlyApps, when non-empty, renders only these apps.
+	OnlyApps []string `yaml:"only_apps,omitempty"`
+	// MutedCategories suppress Android notification categories such as
+	// "promo", "social", "recommendation", "progress" or "sys".
+	MutedCategories []string `yaml:"muted_categories,omitempty"`
+	// Silent controls notifications Android marks as silent (low importance)
+	// that the phone chose to send: "preserve" (default) shows them without
+	// sound, "drop" ignores them, "normal" shows them like any other.
+	Silent string `yaml:"silent,omitempty"`
 }
 
 type AndroidNotificationAction struct {

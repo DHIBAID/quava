@@ -17,7 +17,7 @@ func (s *Session) SyncClipboard(
 	if s == nil || s.conn == nil {
 		return errors.New("session: closed")
 	}
-	if len(clipboard.Content) > 48*1024 {
+	if len(clipboard.Content) > protocol.MaxClipboardBytes {
 		return errors.New("session: clipboard content exceeds 48 KiB sync limit")
 	}
 
@@ -64,11 +64,12 @@ func (s *Session) handleIncomingClipboard(ctx context.Context, msg protocol.Mess
 	if err != nil {
 		return err
 	}
-	if len(content) > 48*1024 {
-		err = errors.New("clipboard payload exceeds 48 KiB sync limit")
-	} else if s.clipboardHandler == nil {
-		err = errors.New("clipboard receive is unavailable")
-	} else {
+	switch {
+	case len(content) > protocol.MaxClipboardBytes:
+		err = errors.New("clipboard: payload exceeds the 48 KiB sync limit")
+	case s.clipboardHandler == nil:
+		err = errors.New("clipboard: receiving is unavailable")
+	default:
 		err = s.clipboardHandler(ctx, models.ClipboardContent{ContentType: models.ClipboardContentTypes(contentType), Content: content})
 	}
 	ack := protocol.NewMessage(protocol.MessageTypeSyncClipboardAck, msg.TransactionID, map[uint64]any{0: err == nil})

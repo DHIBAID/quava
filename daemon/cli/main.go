@@ -8,6 +8,8 @@ func init() {
 	commands.Root.AddCommand(
 		commands.Connect,
 		commands.Disconnect,
+		commands.Unpair,
+		commands.AutoConnect,
 		commands.Discover,
 		commands.Ping,
 		commands.Devices,
@@ -17,6 +19,8 @@ func init() {
 		commands.Notification,
 		commands.Input,
 		commands.Media,
+		commands.Audio,
+		commands.Status,
 	)
 }
 
