@@ -47,8 +47,16 @@ const (
 	MessageTypeInputEvent    = 0x2e
 	MessageTypeInputEventAck = 0x2f
 
-	MessageTypeMultimedia    = 0x30
-	MessageTypeMultimediaAck = 0x31
+	MessageTypeMultimedia      = 0x30
+	MessageTypeMultimediaAck   = 0x31
+	MessageTypeMultimediaState = 0x32
+	// The above is the only one without an Ack pair, wow.
+
+	// MultimediaStateUpdateType identifies whether a multimedia-state payload
+	// contains the complete state or only the current playback position.
+	MultimediaStateUpdateType uint64 = 20
+	MultimediaStateFull       uint64 = 0
+	MultimediaStatePosition   uint64 = 1
 
 	// PingPayloadSilent marks a heartbeat Ping that should not generate a
 	// user-visible notification on the receiving device.

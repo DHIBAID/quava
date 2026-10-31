@@ -2,6 +2,7 @@ package session
 
 import (
 	"bytes"
+	"container/list"
 	"context"
 	"fmt"
 	"image"
@@ -15,6 +16,7 @@ import (
 	"sync"
 	"time"
 
+	qcrypto "libquava/crypto"
 	"libquava/media"
 	"libquava/models"
 	"libquava/protocol"
@@ -27,7 +29,8 @@ import (
 type MediaCommand struct {
 	Command    string
 	BusName    string
-	OffsetMS   int64
+	OffsetMS   int64 // relative offset for media-seek
+	PositionMS int64 // absolute target for media-seek-to
 	Enabled    bool
 	LoopStatus string
 	Volume     float64
@@ -43,11 +46,13 @@ var hostMedia struct {
 func StartMedia(ctx context.Context) error {
 	hostMedia.Lock()
 	defer hostMedia.Unlock()
+
 	if hostMedia.service != nil {
 		return nil
 	}
 
 	service := media.NewMPRISService()
+
 	if err := service.Start(ctx); err != nil {
 		return err
 	}
@@ -116,6 +121,80 @@ func SetActiveMediaPlayer(busName string) (models.MPRISMediaPlayer, error) {
 	return service.GetPlayer(busName)
 }
 
+// startMultimediaSync sends the session's initial state and relays subsequent
+// MPRIS events until the connection-specific context is cancelled.
+func (s *Session) startMultimediaSync(ctx context.Context) {
+	s.multimediaOnce.Do(func() {
+		s.startMultimediaSyncOnce(ctx)
+	})
+}
+
+func (s *Session) startMultimediaSyncOnce(ctx context.Context) {
+	if err := ctx.Err(); err != nil {
+		return
+	}
+
+	service, err := mediaService()
+	if err != nil {
+		// Media support is optional; the initial state still included any system
+		// audio information that was available.
+		if err := s.sendMultimediaState(ctx); err != nil {
+			log.Printf("session: send initial multimedia state: %v", err)
+		}
+		return
+	}
+
+	events, unsubscribe := service.Subscribe()
+	if err := ctx.Err(); err != nil {
+		unsubscribe()
+		return
+	}
+	// Subscribe before the initial snapshot so changes in this initialization
+	// window remain buffered and are sent only after the full state.
+	if err := s.sendMultimediaState(ctx); err != nil {
+		unsubscribe()
+		log.Printf("session: send initial multimedia state: %v", err)
+		return
+	}
+
+	s.multimediaWG.Add(1)
+	go func() {
+		defer s.multimediaWG.Done()
+		defer unsubscribe()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case event, ok := <-events:
+				if !ok {
+					return
+				}
+				if err := s.sendMultimediaEvent(ctx, event); err != nil {
+					log.Printf("session: send multimedia update: %v", err)
+					return
+				}
+			}
+		}
+	}()
+}
+
+func (s *Session) waitMultimediaSync() {
+	s.multimediaWG.Wait()
+}
+
+func (s *Session) sendMultimediaEvent(ctx context.Context, event media.MediaEvent) error {
+	if event.Type == media.MediaEventPositionChanged {
+		// Compare against the live active player: the event's snapshot may
+		// predate an active-player change and carry a stale IsActive flag.
+		active, err := ActiveMediaPlayer()
+		if event.State == nil || err != nil || active.BusName != event.PlayerID {
+			return nil
+		}
+		return s.sendMultimediaPosition(ctx, event.State.Position)
+	}
+	return s.sendMultimediaState(ctx)
+}
+
 // ControlMedia validates, resolves the target player, and executes a host
 // MPRIS action. Daemon callers only pass the command through.
 func ControlMedia(command MediaCommand) error {
@@ -156,6 +235,9 @@ func ControlMedia(command MediaCommand) error {
 	case "media-seek":
 		actionErr = service.Seek(busName, time.Duration(command.OffsetMS)*time.Millisecond)
 
+	case "media-seek-to":
+		actionErr = service.SeekTo(busName, time.Duration(command.PositionMS)*time.Millisecond)
+
 	case "media-shuffle":
 		actionErr = service.SetShuffle(busName, command.Enabled)
 
@@ -181,7 +263,7 @@ func ControlMedia(command MediaCommand) error {
 		return actionErr
 	}
 
-	return service.Refresh()
+	return nil
 }
 
 // handleMultimediaCommand accepts the compact Android control payload and
@@ -195,7 +277,10 @@ func (s *Session) handleMultimediaCommand(ctx context.Context, msg protocol.Mess
 
 	log.Printf("session: received multimedia command=%q", command)
 	if command == "state" {
-		return s.ackMultimedia(ctx, msg, nil)
+		if err := s.ackMultimedia(ctx, msg, nil); err != nil {
+			return err
+		}
+		return s.sendMultimediaState(ctx)
 	}
 
 	if command == "system-state" || command == "system-audio-state" ||
@@ -235,9 +320,9 @@ func (s *Session) handleMultimediaCommand(ctx context.Context, msg protocol.Mess
 	}
 
 	if value, ok := msg.Payload[3].(int64); ok {
-		request.OffsetMS = value
+		request.OffsetMS, request.PositionMS = value, value
 	} else if value, ok := msg.Payload[3].(uint64); ok {
-		request.OffsetMS = int64(value)
+		request.OffsetMS, request.PositionMS = int64(value), int64(value)
 	}
 
 	if value, ok := msg.Payload[4].(bool); ok {
@@ -263,14 +348,15 @@ func (s *Session) handleMultimediaCommand(ctx context.Context, msg protocol.Mess
 	return nil
 }
 
-func (s *Session) ackMultimedia(ctx context.Context, msg protocol.Message, commandErr error) error {
-	payload := map[uint64]any{0: commandErr == nil}
-	if commandErr != nil {
-		payload[1] = commandErr.Error()
+func (s *Session) sendMultimediaState(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	payload := map[uint64]any{
+		protocol.MultimediaStateUpdateType: protocol.MultimediaStateFull,
 	}
 
-	// Media-player state is optional. Its absence must not reject
-	// an otherwise successful system-audio command.
+	// Media player state (optional)
 	if player, err := ActiveMediaPlayer(); err == nil {
 		payload[2] = player.BusName
 		payload[3] = player.Identity
@@ -290,14 +376,12 @@ func (s *Session) ackMultimedia(ctx context.Context, msg protocol.Message, comma
 		payload[17] = player.CanPlay
 		payload[18] = player.CanPause
 
-		if artwork, artworkErr := mediaArtwork(player.Metadata.ArtworkURL); artworkErr == nil {
+		if artwork, err := mediaArtwork(ctx, player.Metadata.ArtworkURL); err == nil {
 			payload[19] = artwork
-		} else if player.Metadata.ArtworkURL != "" {
-			log.Printf("session: media artwork unavailable: %v", artworkErr)
 		}
 	}
 
-	// Audio state is independent of whether a media player is active.
+	// System audio state (independent of media player)
 	if audio, err := media.SystemAudioState(); err == nil {
 		payload[30] = audio.Volume
 		payload[31] = audio.Muted
@@ -314,8 +398,64 @@ func (s *Session) ackMultimedia(ctx context.Context, msg protocol.Message, comma
 			})
 		}
 		payload[33] = devices
-	} else {
-		log.Printf("session: system audio state unavailable: %v", err)
+	}
+
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
+	transactionID, err := qcrypto.GenerateTransactionID()
+	if err != nil {
+		return err
+	}
+
+	msg := protocol.NewMessage(protocol.MessageTypeMultimediaState, transactionID, payload)
+
+	s.pingMutex.Lock()
+	err = s.conn.WriteMessage(ctx, msg)
+	s.pingMutex.Unlock()
+
+	if err != nil {
+		return fmt.Errorf("session: send multimedia state: %w", err)
+	}
+
+	return nil
+}
+
+// sendMultimediaPosition sends only the active player's current position. The
+// explicit update kind prevents receivers from treating this as a partial full
+// state update and clearing metadata or capabilities.
+func (s *Session) sendMultimediaPosition(ctx context.Context, position int64) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	transactionID, err := qcrypto.GenerateTransactionID()
+	if err != nil {
+		return err
+	}
+
+	msg := protocol.NewMessage(protocol.MessageTypeMultimediaState, transactionID, map[uint64]any{
+		protocol.MultimediaStateUpdateType: protocol.MultimediaStatePosition,
+		10:                                 position,
+	})
+
+	s.pingMutex.Lock()
+	err = s.conn.WriteMessage(ctx, msg)
+	s.pingMutex.Unlock()
+	if err != nil {
+		return fmt.Errorf("session: send multimedia position: %w", err)
+	}
+
+	return nil
+}
+
+func (s *Session) ackMultimedia(ctx context.Context, msg protocol.Message, commandErr error) error {
+	payload := map[uint64]any{
+		0: commandErr == nil,
+	}
+
+	if commandErr != nil {
+		payload[1] = commandErr.Error()
 	}
 
 	ack := protocol.NewMessage(
@@ -327,6 +467,7 @@ func (s *Session) ackMultimedia(ctx context.Context, msg protocol.Message, comma
 	s.pingMutex.Lock()
 	err := s.conn.WriteMessage(ctx, ack)
 	s.pingMutex.Unlock()
+
 	if err != nil {
 		return fmt.Errorf("session: send multimedia acknowledgement: %w", err)
 	}
@@ -334,7 +475,7 @@ func (s *Session) ackMultimedia(ctx context.Context, msg protocol.Message, comma
 	return commandErr
 }
 
-func mediaArtwork(rawURL string) ([]byte, error) {
+func mediaArtwork(ctx context.Context, rawURL string) ([]byte, error) {
 	u, err := url.Parse(rawURL)
 	if err != nil {
 		return nil, fmt.Errorf("invalid artwork URL")
@@ -347,7 +488,11 @@ func mediaArtwork(rawURL string) ([]byte, error) {
 
 	case "http", "https":
 		client := &http.Client{Timeout: 5 * time.Second}
-		response, requestErr := client.Get(rawURL)
+		request, requestErr := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
+		if requestErr != nil {
+			return nil, requestErr
+		}
+		response, requestErr := client.Do(request)
 		if requestErr != nil {
 			return nil, requestErr
 		}
@@ -374,7 +519,7 @@ func mediaArtwork(rawURL string) ([]byte, error) {
 
 	// Compress the image
 	// TODO: There's no way recompressing this image every single poll is good. Look at project readme.
-	data, err = compressArtwork(data)
+	data, err = compressArtwork(rawURL, data)
 	if err != nil {
 		return nil, err
 	}
@@ -391,37 +536,124 @@ func mediaArtwork(rawURL string) ([]byte, error) {
 	return data, nil
 }
 
-func compressArtwork(data []byte) ([]byte, error) {
+const artworkCacheCapacity = 5
+
+type artworkCacheEntry struct {
+	key  string
+	data []byte
+}
+
+type artworkLRU struct {
+	mu    sync.Mutex
+	items map[string]*list.Element
+	order *list.List
+}
+
+func newArtworkLRU() *artworkLRU {
+	return &artworkLRU{
+		items: make(map[string]*list.Element, artworkCacheCapacity),
+		order: list.New(),
+	}
+}
+
+func (c *artworkLRU) Get(key string) ([]byte, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	element, ok := c.items[key]
+	if !ok {
+		return nil, false
+	}
+
+	c.order.MoveToFront(element)
+	return element.Value.(*artworkCacheEntry).data, true
+}
+
+func (c *artworkLRU) Add(key string, data []byte) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if element, ok := c.items[key]; ok {
+		c.order.MoveToFront(element)
+		element.Value.(*artworkCacheEntry).data = data
+		return
+	}
+
+	element := c.order.PushFront(&artworkCacheEntry{
+		key:  key,
+		data: data,
+	})
+
+	c.items[key] = element
+
+	if c.order.Len() > artworkCacheCapacity {
+		oldest := c.order.Back()
+		c.order.Remove(oldest)
+		delete(c.items, oldest.Value.(*artworkCacheEntry).key)
+	}
+}
+
+var compressedArtworkCache = newArtworkLRU()
+
+func compressArtwork(cacheKey string, data []byte) ([]byte, error) {
+	const (
+		maxDimension = 512
+		maxSize      = 48 * 1024
+		minDimension = 64
+	)
+
+	// Return cached artwork without decoding or recompressing.
+	if cached, ok := compressedArtworkCache.Get(cacheKey); ok {
+		return cached, nil
+	}
+
+	// Inspect dimensions before decoding the full image.
+	cfg, format, err := image.DecodeConfig(bytes.NewReader(data))
+	if err != nil {
+		return nil, fmt.Errorf("decode artwork config: %w", err)
+	}
+
+	if cfg.Width <= 0 || cfg.Height <= 0 {
+		return nil, fmt.Errorf("invalid artwork dimensions")
+	}
+
+	// Fast path: already-compliant JPEG.
+	if format == "jpeg" && cfg.Width <= maxDimension && cfg.Height <= maxDimension && len(data) <= maxSize {
+		compressedArtworkCache.Add(cacheKey, data)
+		return data, nil
+	}
+	// Protect against excessively large decoded images.
+	const maxPixels = 16_000_000
+
+	if int64(cfg.Width)*int64(cfg.Height) > maxPixels {
+		return nil, fmt.Errorf("artwork dimensions exceed pixel limit")
+	}
+
 	img, _, err := image.Decode(bytes.NewReader(data))
 	if err != nil {
 		return nil, fmt.Errorf("decode artwork: %w", err)
 	}
 
-	// Start at the original dimensions, capped at 512x512.
 	bounds := img.Bounds()
 	width, height := bounds.Dx(), bounds.Dy()
 
-	if width <= 0 || height <= 0 {
-		return nil, fmt.Errorf("invalid artwork dimensions")
-	}
-
-	const maxDimension = 512
+	// Resize to maximum dimensions once, if needed.
 	if width > maxDimension || height > maxDimension {
-		scale := float64(maxDimension) / float64(max(width, height))
+		scale := float64(maxDimension) /
+			float64(max(width, height))
+
 		width = max(1, int(float64(width)*scale))
 		height = max(1, int(float64(height)*scale))
 
 		resized := image.NewRGBA(image.Rect(0, 0, width, height))
-		draw.CatmullRom.Scale(
-			resized, resized.Bounds(),
-			img, bounds, draw.Over, nil,
-		)
+
+		draw.CatmullRom.Scale(resized, resized.Bounds(), img, bounds, draw.Over, nil)
+
 		img = resized
 	}
 
-	// Try progressively lower JPEG qualities and resolutions.
 	for {
-		for _, quality := range []int{85, 75, 65, 55, 45, 35} {
+		for _, quality := range []int{75, 60, 45, 35} {
 			var buf bytes.Buffer
 
 			if err := jpeg.Encode(&buf, img, &jpeg.Options{
@@ -430,26 +662,27 @@ func compressArtwork(data []byte) ([]byte, error) {
 				return nil, fmt.Errorf("encode artwork: %w", err)
 			}
 
-			if buf.Len() <= 48*1024 {
-				return buf.Bytes(), nil
+			if buf.Len() <= maxSize {
+				result := buf.Bytes()
+				compressedArtworkCache.Add(cacheKey, result)
+				return result, nil
 			}
 		}
 
 		bounds := img.Bounds()
 		width, height := bounds.Dx(), bounds.Dy()
 
-		if width <= 64 && height <= 64 {
+		if width <= minDimension && height <= minDimension {
 			return nil, fmt.Errorf("artwork cannot fit transfer limit")
 		}
 
-		width = max(1, width*3/4)
-		height = max(1, height*3/4)
+		width = max(minDimension, width*3/4)
+		height = max(minDimension, height*3/4)
 
 		resized := image.NewRGBA(image.Rect(0, 0, width, height))
-		draw.CatmullRom.Scale(
-			resized, resized.Bounds(),
-			img, bounds, draw.Over, nil,
-		)
+
+		draw.CatmullRom.Scale(resized, resized.Bounds(), img, bounds, draw.Over, nil)
+
 		img = resized
 	}
 }

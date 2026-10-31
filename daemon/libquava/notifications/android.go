@@ -69,13 +69,35 @@ func NewAndroidNotificationBridge(action func(context.Context, string, int, stri
 		return nil, fmt.Errorf("notifications: connect to session bus: %w", err)
 	}
 	b := &AndroidNotificationBridge{conn: conn, byLinux: make(map[uint32]androidNotification), byKey: make(map[string]uint32), replying: make(map[string]bool), action: action, dismiss: dismiss}
-	if err := conn.AddMatchSignal(dbus.WithMatchInterface("org.freedesktop.Notifications")); err != nil {
-		if err := conn.Close(); err != nil {
-			return nil, err
-		}
 
-		return nil, err
+	notificationInterface := "org.freedesktop.Notifications"
+
+	matches := [][]dbus.MatchOption{
+		{
+			dbus.WithMatchInterface(notificationInterface),
+			dbus.WithMatchMember("ActionInvoked"),
+		},
+		{
+			dbus.WithMatchInterface(notificationInterface),
+			dbus.WithMatchMember("NotificationClosed"),
+		},
+		{
+			dbus.WithMatchInterface(notificationInterface),
+			dbus.WithMatchMember("NotificationReplied"),
+		},
 	}
+
+	for i, match := range matches {
+		if err := conn.AddMatchSignal(match...); err != nil {
+			for _, registered := range matches[:i] {
+				_ = conn.RemoveMatchSignal(registered...)
+			}
+
+			_ = conn.Close()
+			return nil, fmt.Errorf("notifications: subscribe to signal: %w", err)
+		}
+	}
+
 	signals := make(chan *dbus.Signal, 32)
 	conn.Signal(signals)
 	go b.watch(signals)

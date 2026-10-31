@@ -164,18 +164,34 @@ class QuavaService : Service() {
             return
         }
 
-        hostMediaNotification.updateMetadata(
+        val metadataChanged = hostMediaNotification.updateMetadata(
             trackTitle = state.title,
             trackArtist = state.artists,
+            trackAlbum = state.album,
+            trackId = state.playerId,
             artworkBytes = state.artwork,
             durationUs = state.durationUs
         )
 
-        hostMediaNotification.updatePlaybackState(
+        val playbackPresentationChanged = hostMediaNotification.updatePlaybackState(
             playing = state.playbackStatus.equals("Playing", ignoreCase = true),
             positionUs = state.positionUs,
             durationUs = state.durationUs,
+            canPrevious = state.canGoPrevious,
+            canNext = state.canGoNext,
+            seekable = state.canSeek,
         )
+        // Also publish when the notification was dismissed (player returned,
+        // reconnect) even though content is unchanged.
+        if (metadataChanged || playbackPresentationChanged || !hostMediaNotification.isVisible()) {
+            hostMediaNotification.show()
+        }
+    }
+
+    fun updateHostMediaPosition(positionUs: Long) {
+        if (::hostMediaNotification.isInitialized) {
+            hostMediaNotification.updatePlaybackPosition(positionUs)
+        }
     }
 
     fun onPing(peerName: String) {

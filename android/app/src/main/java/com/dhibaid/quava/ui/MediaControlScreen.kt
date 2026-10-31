@@ -1,5 +1,6 @@
 package com.dhibaid.quava.ui
 
+import android.os.SystemClock
 import android.graphics.BitmapFactory
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -69,19 +70,51 @@ fun MediaControlScreen(
 
     val send: (MediaControl) -> Unit = { server.sendMediaControl(it) }
 
-    // Refresh host state periodically, including track changes.
+    // Request a snapshot when the screen opens. Subsequent state comes from
+    // the daemon's MPRIS event stream.
     LaunchedEffect(server) {
-        while (true) {
-            send(MediaControl(MediaActions.STATE))
-            delay(1_000)
-        }
+        send(MediaControl(MediaActions.STATE))
     }
 
-    LaunchedEffect(state.positionUs, state.durationUs, seeking) {
-        if (!seeking && state.durationUs > 0L) {
-            progress = (
-                    state.positionUs.toDouble() / state.durationUs
-                    ).toFloat().coerceIn(0f, 1f)
+    LaunchedEffect(
+        state.positionUs,
+        state.durationUs,
+        state.playbackStatus,
+        state.title,
+        state.artists,
+        state.album,
+        seeking,
+    ) {
+        if (seeking) return@LaunchedEffect
+        if (state.durationUs <= 0L) {
+            if (progress != 0f) progress = 0f
+            return@LaunchedEffect
+        }
+
+        val basePositionUs = state.positionUs
+            .coerceIn(0L, state.durationUs)
+        val startTime = SystemClock.elapsedRealtime()
+
+        if (state.playbackStatus != "Playing") {
+            val nextProgress = (
+                basePositionUs.toDouble() / state.durationUs
+                ).toFloat().coerceIn(0f, 1f)
+            if (progress != nextProgress) progress = nextProgress
+            return@LaunchedEffect
+        }
+
+        while (true) {
+            val elapsedUs =
+                (SystemClock.elapsedRealtime() - startTime) * 1_000L
+
+            val currentPositionUs = (basePositionUs + elapsedUs)
+                .coerceAtMost(state.durationUs)
+            val nextProgress = (
+                currentPositionUs.toDouble() / state.durationUs
+                ).toFloat().coerceIn(0f, 1f)
+            if (progress != nextProgress) progress = nextProgress
+
+            delay(250)
         }
     }
 
@@ -219,8 +252,8 @@ fun MediaControlScreen(
 
                     send(
                         MediaControl(
-                            action = MediaActions.SEEK,
-                            offsetMs = (targetUs - state.positionUs) / 1_000,
+                            action = MediaActions.SEEK_TO,
+                            positionMs = targetUs / 1_000,
                         ),
                     )
                     seeking = false

@@ -313,7 +313,7 @@ class PairingProtocol(private val appContext: Context) {
                 MULTIMEDIA, randomBytes(TRANSACTION_ID_BYTES), mapOf(
                     1 to control.action,
                     2 to control.busName,
-                    3 to control.offsetMs,
+                    3 to control.positionMs,
                     4 to control.enabled,
                     5 to control.loopStatus,
                     6 to control.volume,
@@ -332,6 +332,7 @@ class PairingProtocol(private val appContext: Context) {
         onNotificationClear: suspend (Message) -> Unit,
         onNotificationAction: suspend (Message) -> Unit,
         onAndroidNotificationDismiss: suspend (Message) -> Unit,
+        onMediaState: (Message) -> Unit,
         onMediaAck: (Message) -> Unit,
     ) {
         while (!session.socket.isClosed) {
@@ -449,8 +450,14 @@ class PairingProtocol(private val appContext: Context) {
                     if (!accepted) Log.w("Quava", "Host rejected remote input")
                 }
 
+
                 MULTIMEDIA_ACK -> {
                     onMediaAck(message)
+                }
+
+                MULTIMEDIA_STATE -> {
+                    Log.d("Quava", "Received Multimedia State")
+                    onMediaState(message)
                 }
 
                 NOTIFICATION_ACTION -> {
@@ -747,6 +754,7 @@ class PairingProtocol(private val appContext: Context) {
         private const val INPUT_EVENT_ACK = 0x2fL
         private const val MULTIMEDIA = 0x30L
         private const val MULTIMEDIA_ACK = 0x31L
+        private const val MULTIMEDIA_STATE = 0x32L
         private const val PING_SILENT = 0
         private const val MAX_FRAME_BYTES = 64 * 1024
         private const val PAIRING_TIMEOUT_MS = 120_000

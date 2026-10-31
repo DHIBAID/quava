@@ -208,7 +208,8 @@ class PairingServer(
                 },
                 onNotificationAction = { message -> quavaService?.onAndroidNotificationAction(message) },
                 onAndroidNotificationDismiss = { message -> quavaService?.onAndroidNotificationDismiss(message) },
-                onMediaAck = ::updateMediaState,
+                onMediaAck = ::handleMediaAck,
+                onMediaState = ::updateMediaState,
             )
         } finally {
             // A replacement connection may already be active when an older
@@ -277,8 +278,27 @@ class PairingServer(
 
 
     private fun updateMediaState(message: PairingProtocol.Message) {
-        val accepted = message.payload[0] as? Boolean ?: false
         val previous = _mediaState.value
+        val updateType = (message.payload[MULTIMEDIA_UPDATE_TYPE] as? Number)?.toInt()
+            ?: MULTIMEDIA_UPDATE_FULL
+
+        when (updateType) {
+            MULTIMEDIA_UPDATE_POSITION -> {
+                val positionUs = (message.payload[10] as? Number)?.toLong() ?: return
+                if (previous.available && previous.playerId.isNotBlank() &&
+                    positionUs != previous.positionUs
+                ) {
+                    _mediaState.value = previous.copy(positionUs = positionUs)
+                    quavaService?.updateHostMediaPosition(positionUs)
+                }
+                return
+            }
+            MULTIMEDIA_UPDATE_FULL -> Unit
+            else -> {
+                Log.w(TAG, "Ignoring unknown multimedia update type $updateType")
+                return
+            }
+        }
 
         fun text(key: Int): String =
             message.payload[key] as? String ?: ""
@@ -309,109 +329,98 @@ class PairingServer(
                 )
             } ?: previous.outputDevices
 
-        val next = previous.copy(
-            available = if (hasMediaState) true else previous.available,
-            error = if (accepted) {
-                null
-            } else {
-                message.payload[1] as? String
-                    ?: "Host rejected media command"
-            },
-            identity = if (hasMediaState) {
-                text(3).ifBlank { "Host media" }
-            } else {
-                previous.identity
-            },
-            title = if (hasMediaState) {
-                text(5).ifBlank { "Unknown title" }
-            } else {
-                previous.title
-            },
-            artists = if (hasMediaState) {
-                (message.payload[6] as? List<*>)
+        val next = if (hasMediaState) {
+            previous.copy(
+                available = true,
+                error = null,
+                playerId = text(2),
+                identity = text(3).ifBlank { "Host media" },
+                title = text(5).ifBlank { "Unknown title" },
+                artists = (message.payload[6] as? List<*>)
                     ?.filterIsInstance<String>()
                     ?.joinToString(", ")
                     ?.ifBlank { "Unknown artist" }
-                    ?: "Unknown artist"
-            } else {
-                previous.artists
-            },
-            album = if (hasMediaState) text(7) else previous.album,
-            artworkUrl = if (hasMediaState) text(8) else previous.artworkUrl,
-            // Clear old artwork when a new media state has no artwork bytes.
-            artwork = if (hasMediaState) {
-                (message.payload[19] as? ByteArray)
-                    ?: if (
-                        text(5) == previous.title &&
-                        text(7) == previous.album
-                    ) {
+                    ?: "Unknown artist",
+                album = text(7),
+                artworkUrl = text(8),
+                // Clear old artwork when a new media state has no artwork bytes.
+                artwork = (message.payload[19] as? ByteArray)
+                    ?: if (text(5) == previous.title && text(7) == previous.album) {
                         previous.artwork
                     } else {
                         null
-                    }
-            } else {
-                previous.artwork
-            },
-            playbackStatus = if (hasMediaState) {
-                text(4)
-            } else {
-                previous.playbackStatus
-            },
-            durationUs = if (hasMediaState) number(9) else previous.durationUs,
-            positionUs = if (hasMediaState) number(10) else previous.positionUs,
-            volume = if (hasMediaState) {
-                (message.payload[11] as? Number)?.toDouble()
-                    ?: previous.volume
-            } else {
-                previous.volume
-            },
-            shuffle = if (hasMediaState) {
-                message.payload[12] as? Boolean ?: previous.shuffle
-            } else {
-                previous.shuffle
-            },
-            loopStatus = if (hasMediaState) {
-                text(13).ifBlank { "None" }
-            } else {
-                previous.loopStatus
-            },
-            canGoPrevious = if (hasMediaState) {
-                message.payload[14] as? Boolean ?: previous.canGoPrevious
-            } else {
-                previous.canGoPrevious
-            },
-            canGoNext = if (hasMediaState) {
-                message.payload[15] as? Boolean ?: previous.canGoNext
-            } else {
-                previous.canGoNext
-            },
-            canSeek = if (hasMediaState) {
-                message.payload[16] as? Boolean ?: previous.canSeek
-            } else {
-                previous.canSeek
-            },
-            systemVolume = (message.payload[30] as? Number)?.toDouble()
-                ?: previous.systemVolume,
-            systemMuted = message.payload[31] as? Boolean
-                ?: previous.systemMuted,
-            outputDevice = text(32).ifBlank { previous.outputDevice },
-            outputDevices = devices,
-        )
+                    },
+                playbackStatus = text(4),
+                durationUs = number(9),
+                positionUs = number(10),
+                volume = (message.payload[11] as? Number)?.toDouble()
+                    ?: previous.volume,
+                shuffle = message.payload[12] as? Boolean ?: previous.shuffle,
+                loopStatus = text(13).ifBlank { "None" },
+                canGoPrevious = message.payload[14] as? Boolean ?: previous.canGoPrevious,
+                canGoNext = message.payload[15] as? Boolean ?: previous.canGoNext,
+                canSeek = message.payload[16] as? Boolean ?: previous.canSeek,
+                systemVolume = (message.payload[30] as? Number)?.toDouble()
+                    ?: previous.systemVolume,
+                systemMuted = message.payload[31] as? Boolean
+                    ?: previous.systemMuted,
+                outputDevice = text(32).ifBlank { previous.outputDevice },
+                outputDevices = devices,
+            )
+        } else {
+            HostMediaState(
+                error = null,
+                systemVolume = (message.payload[30] as? Number)?.toDouble()
+                    ?: previous.systemVolume,
+                systemMuted = message.payload[31] as? Boolean
+                    ?: previous.systemMuted,
+                outputDevice = text(32).ifBlank { previous.outputDevice },
+                outputDevices = devices,
+            )
+        }
 
+        if (sameMediaState(previous, next)) return
         _mediaState.value = next
 
         Log.d(
             "QuavaMedia",
             "Track=${next.title}, status=${next.playbackStatus}, " +
-                    "positionUs=${next.positionUs}, durationUs=${next.durationUs}"
+                    "positionUs=${next.positionUs}, durationUs=${next.durationUs}" +
+                    "State update: shuffle=${next.shuffle}, loop=${next.loopStatus}"
         )
 
-        if (hasMediaState) {
+        if (mediaNotificationChanged(previous, next)) {
             quavaService?.updateHostMediaState(next)
         }
+    }
 
-        if (!accepted) {
-            Log.w(TAG, "host rejected media control: ${message.payload[1]}")
+    private fun sameMediaState(left: HostMediaState, right: HostMediaState): Boolean =
+        sameArtwork(left.artwork, right.artwork) &&
+            left.copy(artwork = null) == right.copy(artwork = null)
+
+    private fun mediaNotificationChanged(left: HostMediaState, right: HostMediaState): Boolean =
+        left.available != right.available ||
+            left.title != right.title ||
+            left.artists != right.artists ||
+            !sameArtwork(left.artwork, right.artwork) ||
+            left.playbackStatus != right.playbackStatus ||
+            left.positionUs != right.positionUs ||
+            left.durationUs != right.durationUs
+
+    private fun sameArtwork(left: ByteArray?, right: ByteArray?): Boolean = when {
+        left === right -> true
+        left == null || right == null -> false
+        else -> left.contentEquals(right)
+    }
+
+    private fun handleMediaAck(message: PairingProtocol.Message) {
+        val success = message.payload[0] as? Boolean ?: false
+
+        if (!success) {
+            val error = message.payload[1] as? String ?: "Unknown multimedia error"
+            Log.e("Quava", "Media command failed: $error")
+            // Surface the failure; the next full state update clears it.
+            _mediaState.update { it.copy(error = error) }
         }
     }
 
@@ -443,5 +452,8 @@ class PairingServer(
 
     companion object {
         private const val TAG = "Quava"
+        private const val MULTIMEDIA_UPDATE_TYPE = 20
+        private const val MULTIMEDIA_UPDATE_FULL = 0
+        private const val MULTIMEDIA_UPDATE_POSITION = 1
     }
 }

@@ -34,6 +34,8 @@ type Session struct {
 	pendingMutex        sync.Mutex
 	pending             map[string]chan protocol.Message
 	readerOnce          sync.Once
+	multimediaOnce      sync.Once
+	multimediaWG        sync.WaitGroup
 	readDone            chan error
 	closeNotification   func(uint32) error
 	androidNotification func(context.Context, models.AndroidNotificationContent) error
@@ -166,96 +168,6 @@ func Connect(ctx context.Context, conn *protocol.Conn, identity models.IdentityF
 	}, nil
 }
 
-func NewServerSession(ctx context.Context, conn *protocol.Conn, identity models.IdentityFile, peer models.PairResult, first protocol.Message) (*Session, error) {
-	if conn == nil {
-		return nil, errors.New("session: nil connection")
-	}
-	if first.Version != protocol.ProtocolVersion || first.Type != protocol.MessageTypeSessionHello {
-		return nil, errors.New("session: expected session hello")
-	}
-	if len(identity.PrivateKey) != ed25519.PrivateKeySize || len(identity.PublicKey) != ed25519.PublicKeySize {
-		return nil, errors.New("session: invalid local identity")
-	}
-	if len(peer.PeerPublicKey) != ed25519.PublicKeySize || len(peer.PeerCredential) == 0 {
-		return nil, errors.New("session: incomplete trust record")
-	}
-
-	remoteID, err := protocol.PayloadBytes(first.Payload, 0)
-	if err != nil {
-		return nil, err
-	}
-	remotePub, err := protocol.PayloadBytes(first.Payload, 1)
-	if err != nil {
-		return nil, err
-	}
-	remoteNonce, err := protocol.PayloadBytes(first.Payload, 2)
-	if err != nil {
-		return nil, err
-	}
-	if len(remotePub) != ed25519.PublicKeySize || !hmac.Equal(remoteID, crypto.DeviceIDBytes(ed25519.PublicKey(remotePub))) || !hmac.Equal(remoteID, crypto.DeviceIDBytes(ed25519.PublicKey(peer.PeerPublicKey))) {
-		return nil, errors.New("session: peer identity mismatch")
-	}
-	localNonce, err := crypto.GenerateNonce()
-	if err != nil {
-		return nil, err
-	}
-	localID := crypto.DeviceIDBytes(identity.PublicKey)
-	transcript := transcript(first.TransactionID, remoteID, localID, remotePub, identity.PublicKey, remoteNonce, localNonce)
-	if err := conn.WriteMessage(ctx, protocol.NewMessage(protocol.MessageTypeSessionChallenge, first.TransactionID, map[uint64]any{0: localID, 1: []byte(identity.PublicKey), 2: localNonce, 3: mac(peer.PeerCredential, "challenge", transcript)})); err != nil {
-		return nil, err
-	}
-
-	auth, err := conn.ReadMessage(ctx)
-	if err != nil {
-		return nil, err
-	}
-	if auth.Version != protocol.ProtocolVersion || auth.Type != protocol.MessageTypeSessionAuthenticate || !hmac.Equal(auth.TransactionID, first.TransactionID) {
-		return nil, errors.New("session: invalid authentication")
-	}
-	authMAC, err := protocol.PayloadBytes(auth.Payload, 0)
-	if err != nil {
-		return nil, err
-	}
-	if !hmac.Equal(authMAC, mac(peer.PeerCredential, "authenticate", transcript)) {
-		return nil, errors.New("session: peer authentication failed")
-	}
-
-	hostname, err := os.Hostname()
-	if err != nil {
-		hostname = "Unknown PC"
-	}
-
-	log.Printf(
-		"SESSION_READY: sending hostname=%q tx=%x",
-		hostname,
-		first.TransactionID,
-	)
-
-	payload := map[uint64]any{
-		protocol.SessionReadyMAC:      mac(peer.PeerCredential, "ready", transcript),
-		protocol.SessionReadyHostname: hostname,
-	}
-
-	if err := conn.WriteMessage(ctx, protocol.NewMessage(protocol.MessageTypeSessionReady, first.TransactionID, payload)); err != nil {
-		return nil, err
-	}
-	return &Session{
-		conn:              conn,
-		peer:              peer,
-		localID:           localID,
-		localPublic:       identity.PublicKey,
-		txID:              append([]byte(nil), first.TransactionID...),
-		pending:           make(map[string]chan protocol.Message),
-		closeNotification: notifications.CloseNotification,
-	}, nil
-}
-
-// Run maintains a session to a trusted peer. It reconnects after transport loss
-// with bounded exponential backoff. Pairing trust is never modified by reconnects.
-func Run(ctx context.Context, identity models.IdentityFile, peer models.PairResult, dial func(context.Context) (*protocol.Conn, error), onConnect func(*Session), onDisconnect func(error)) error {
-	return RunWithCallbacks(ctx, identity, peer, dial, nil, onConnect, onDisconnect)
-}
-
 // RunWithCallbacks allows callers to install message handlers before the
 // dispatcher starts, then publish the session only after the dispatcher is live.
 func RunWithCallbacks(ctx context.Context, identity models.IdentityFile, peer models.PairResult, dial func(context.Context) (*protocol.Conn, error), onPrepare func(*Session), onConnect func(*Session), onDisconnect func(error)) error {
@@ -322,8 +234,10 @@ func RunWithCallbacks(ctx context.Context, identity models.IdentityFile, peer mo
 		if onConnect != nil {
 			onConnect(s)
 		}
+		s.startMultimediaSync(sessionCtx)
 		err = s.RunHeartbeat(sessionCtx)
 		sessionCancel()
+		s.waitMultimediaSync()
 		_ = s.Close()
 		if ctx.Err() != nil {
 			return ctx.Err()
@@ -597,8 +511,6 @@ func (s *Session) Close() error {
 	}
 	return s.conn.Close()
 }
-
-func (s *Session) Peer() models.PairResult { return s.peer }
 
 func transcript(txID, localID, remoteID, localPub, remotePub, localNonce, remoteNonce []byte) []byte {
 	out := make([]byte, 0, len(protocol.SessionProtocolName)+len(txID)+len(localID)+len(remoteID)+len(localPub)+len(remotePub)+len(localNonce)+len(remoteNonce))

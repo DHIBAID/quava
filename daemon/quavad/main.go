@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"log"
+
+	"log/slog"
 	"net"
 	"os"
 	"os/signal"
@@ -18,6 +20,8 @@ import (
 	"libquava/config"
 	"libquava/inputs"
 	"libquava/notifications"
+
+	"libquava/profiling"
 	"libquava/session"
 	"quavad/models"
 )
@@ -39,6 +43,33 @@ type Daemon struct {
 	clipboardReady       bool
 	connMu               sync.Mutex
 	connections          map[net.Conn]struct{}
+}
+
+func pprof_init() {
+	profiler, err := profiling.Start(
+		profiling.Config{
+			Address:              "127.0.0.1:6060",
+			MutexProfileFraction: 5,
+			BlockProfileRate:     1,
+		},
+		slog.Default(),
+	)
+
+	if err != nil {
+		slog.Error("profiling initialization failed", "error", err)
+	} else {
+		defer func() {
+			ctx, cancel := context.WithTimeout(
+				context.Background(),
+				5*time.Second,
+			)
+			defer cancel()
+
+			if err := profiler.Stop(ctx); err != nil {
+				slog.Error("profiling shutdown failed", "error", err)
+			}
+		}()
+	}
 }
 
 func main() {
@@ -79,6 +110,9 @@ func main() {
 		inputEnabled: map[string]bool{},
 		connections:  map[net.Conn]struct{}{},
 	}
+
+	// CPU and Memory profiling, very helpful for spotting optimizations in the code.
+	// pprof_init()
 
 	if err := session.StartMedia(runCtx); err != nil {
 		log.Printf("mpris: service unavailable: %v", err)

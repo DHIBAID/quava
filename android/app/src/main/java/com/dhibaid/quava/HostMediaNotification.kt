@@ -48,12 +48,29 @@ class HostMediaNotification(private val context: Context) {
 
     private var title: String = "Host media"
     private var artist: String = "Control media playing on your connected computer"
+    private var album: String = ""
+    private var trackId: String = ""
+    private var metadataDurationMs: Long = 0L
+    private var artworkBytes: ByteArray? = null
     private var artwork: Bitmap? = null
     private var isPlaying: Boolean = false
+    private var positionMs: Long = 0L
+    private var durationMs: Long = 0L
+    private var metadataInitialized = false
+    private var playbackStateInitialized = false
+    private var canGoPrevious = true
+    private var canGoNext = true
+    private var canSeek = true
+    private var notificationVisible = false
+    private var notificationDirty = false
 
     fun show() {
+        if (notificationVisible && !notificationDirty) return
         mediaSession.isActive = true
-        publishPlaybackState()
+        if (!playbackStateInitialized) {
+            publishPlaybackState()
+            playbackStateInitialized = true
+        }
 
         val notification = NotificationCompat.Builder(context, QuavaService.MEDIA_CHANNEL)
             .setSmallIcon(android.R.drawable.ic_media_play)
@@ -88,6 +105,8 @@ class HostMediaNotification(private val context: Context) {
             .build()
 
         notificationManager.notify(QuavaService.MEDIA_NOTIFICATION_ID, notification)
+        notificationVisible = true
+        notificationDirty = false
     }
 
     /**
@@ -97,67 +116,114 @@ class HostMediaNotification(private val context: Context) {
     fun updateMetadata(
         trackTitle: String,
         trackArtist: String,
+        trackAlbum: String,
+        trackId: String,
         artworkBytes: ByteArray? = null,
         durationUs: Long = 0L,
-    ) {
+    ): Boolean {
+        val durationMs = (durationUs / 1000L).coerceAtLeast(0L)
+        val normalizedArtwork = artworkBytes?.takeIf { it.isNotEmpty() }
+        val artworkChanged = !sameArtwork(this.artworkBytes, normalizedArtwork)
+        val changed = !metadataInitialized ||
+            title != trackTitle ||
+            artist != trackArtist ||
+            album != trackAlbum ||
+            this.trackId != trackId ||
+            metadataDurationMs != durationMs ||
+            artworkChanged
+        if (!changed) return false
+
         title = trackTitle
         artist = trackArtist
-
-        artwork = artworkBytes?.let { bytes ->
-            runCatching {
-                BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
-            }.getOrNull()
+        album = trackAlbum
+        this.trackId = trackId
+        metadataDurationMs = durationMs
+        if (artworkChanged) {
+            this.artworkBytes = normalizedArtwork
+            artwork = normalizedArtwork?.let { bytes ->
+                runCatching { BitmapFactory.decodeByteArray(bytes, 0, bytes.size) }.getOrNull()
+            }
         }
 
         val metadata = MediaMetadataCompat.Builder()
             .putString(MediaMetadataCompat.METADATA_KEY_TITLE, title)
             .putString(MediaMetadataCompat.METADATA_KEY_ARTIST, artist)
+            .putString(MediaMetadataCompat.METADATA_KEY_ALBUM, album)
             .putString(MediaMetadataCompat.METADATA_KEY_DISPLAY_TITLE, title)
             .putString(MediaMetadataCompat.METADATA_KEY_DISPLAY_SUBTITLE, artist)
-            .putLong(MediaMetadataCompat.METADATA_KEY_DURATION, durationUs / 1000L)
+            .putLong(MediaMetadataCompat.METADATA_KEY_DURATION, metadataDurationMs)
 
         artwork?.let {
             metadata.putBitmap(MediaMetadataCompat.METADATA_KEY_ART, it)
             metadata.putBitmap(MediaMetadataCompat.METADATA_KEY_ALBUM_ART, it)
         }
 
-        Log.d(
-            "QuavaMedia",
-            "Publishing metadata: title=$title, durationMs=${durationUs / 1000L}"
-        )
-
         mediaSession.setMetadata(metadata.build())
-        show()
+        metadataInitialized = true
+        notificationDirty = true
+        return true
     }
 
-    /** Call whenever the host's play/pause state changes. */
-    private var durationMs: Long = 0L
-    private var positionMs: Long = 0L
-
+    /** Updates MediaSession playback without rebuilding metadata. */
     fun updatePlaybackState(
         playing: Boolean,
         positionUs: Long = 0L,
         durationUs: Long = 0L,
-    ) {
+        canPrevious: Boolean = canGoPrevious,
+        canNext: Boolean = canGoNext,
+        seekable: Boolean = canSeek,
+    ): Boolean {
+        val nextPositionMs = (positionUs / 1000L).coerceAtLeast(0L)
+        val nextDurationMs = (durationUs / 1000L).coerceAtLeast(0L)
+        val playingChanged = !playbackStateInitialized || isPlaying != playing
+        val actionsChanged = canGoPrevious != canPrevious || canGoNext != canNext || canSeek != seekable
+        val changed = playingChanged || actionsChanged ||
+            positionMs != nextPositionMs || durationMs != nextDurationMs
+        if (!changed) return false
+
+        canGoPrevious = canPrevious
+        canGoNext = canNext
+        canSeek = seekable
+
         isPlaying = playing
-        positionMs = (positionUs / 1000L).coerceAtLeast(0L)
-        durationMs = (durationUs / 1000L).coerceAtLeast(0L)
+        positionMs = nextPositionMs
+        durationMs = nextDurationMs
 
         publishPlaybackState()
-        show()
+        playbackStateInitialized = true
+        if (playingChanged) notificationDirty = true
+        return playingChanged
+    }
+
+    // Position-only messages update MediaSession state but leave the
+    // notification layout and metadata untouched.
+    fun updatePlaybackPosition(positionUs: Long) {
+        updatePlaybackState(isPlaying, positionUs, durationMs * 1000L)
     }
 
     fun dismiss() {
         notificationManager.cancel(QuavaService.MEDIA_NOTIFICATION_ID)
         mediaSession.isActive = false
+        notificationVisible = false
+        // Drop cached state so a returning or different player never inherits
+        // stale metadata/artwork, and is fully republished on restoration.
+        metadataInitialized = false
+        playbackStateInitialized = false
+        notificationDirty = false
+        artworkBytes = null
+        artwork = null
+        trackId = ""
     }
 
+    fun isVisible(): Boolean = notificationVisible
+
     private fun publishPlaybackState() {
-        val actions = PlaybackStateCompat.ACTION_PLAY or
+        var actions = PlaybackStateCompat.ACTION_PLAY or
                 PlaybackStateCompat.ACTION_PAUSE or
-                PlaybackStateCompat.ACTION_PLAY_PAUSE or
-                PlaybackStateCompat.ACTION_SKIP_TO_PREVIOUS or
-                PlaybackStateCompat.ACTION_SKIP_TO_NEXT
+                PlaybackStateCompat.ACTION_PLAY_PAUSE
+        if (canGoPrevious) actions = actions or PlaybackStateCompat.ACTION_SKIP_TO_PREVIOUS
+        if (canGoNext) actions = actions or PlaybackStateCompat.ACTION_SKIP_TO_NEXT
+        if (canSeek) actions = actions or PlaybackStateCompat.ACTION_SEEK_TO
 
         mediaSession.setPlaybackState(
             PlaybackStateCompat.Builder()
@@ -170,6 +236,12 @@ class HostMediaNotification(private val context: Context) {
                 )
                 .build()
         )
+    }
+
+    private fun sameArtwork(left: ByteArray?, right: ByteArray?): Boolean = when {
+        left === right -> true
+        left == null || right == null -> false
+        else -> left.contentEquals(right)
     }
 
     private fun dispatchMediaAction(action: String) {

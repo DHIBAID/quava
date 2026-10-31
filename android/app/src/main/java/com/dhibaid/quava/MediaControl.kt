@@ -3,7 +3,7 @@ package com.dhibaid.quava
 data class MediaControl(
     val action: String,
     val busName: String = "",
-    val offsetMs: Long = 0,
+    val positionMs: Long = 0, // absolute target for SEEK
     val enabled: Boolean = false,
     val loopStatus: String = "",
     val volume: Double = 0.0,
@@ -12,6 +12,7 @@ data class MediaControl(
 data class HostMediaState(
     val available: Boolean = false,
     val error: String? = null,
+    val playerId: String = "",
     val identity: String = "Host media",
     val title: String = "Nothing is playing",
     val artists: String = "Open a media player on your computer",
@@ -42,6 +43,7 @@ object MediaActions {
     const val NEXT = "next"
     const val PREVIOUS = "previous"
     const val SEEK = "seek"
+    const val SEEK_TO = "seek-to"
     const val SHUFFLE = "shuffle"
     const val LOOP = "loop"
     const val VOLUME = "volume"
