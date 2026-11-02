@@ -117,7 +117,10 @@ class QuavaService : Service() {
             ACTION_STOP_RING -> stopRing()
             ACTION_MEDIA_CONTROL -> {
                 intent.getStringExtra(EXTRA_MEDIA_ACTION)?.let { action ->
-                    scope.launch(Dispatchers.IO) { server.sendMediaControl(MediaControl(action)) }
+                    val positionMs = intent.getLongExtra(EXTRA_MEDIA_POSITION_MS, 0L)
+                    scope.launch(Dispatchers.IO) {
+                        server.sendMediaControl(MediaControl(action, positionMs = positionMs))
+                    }
                 }
             }
 
@@ -398,6 +401,7 @@ class QuavaService : Service() {
         const val EXTRA_STOP_RING = "STOP_RING"
         const val EXTRA_NOTIFICATION_ID = "NOTIFICATION_ID"
         const val EXTRA_MEDIA_ACTION = "MEDIA_ACTION"
+        const val EXTRA_MEDIA_POSITION_MS = "MEDIA_POSITION_MS"
         const val EXTRA_OPEN_MEDIA = "OPEN_MEDIA"
 
         private const val TAG = "QuavaRing"

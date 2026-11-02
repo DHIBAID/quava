@@ -38,6 +38,9 @@ class HostMediaNotification(private val context: Context) {
 
             override fun onSkipToNext() =
                 dispatchMediaAction(MediaActions.NEXT)
+
+            override fun onSeekTo(position: Long) =
+                dispatchMediaAction(MediaActions.SEEK_TO, position)
         })
         setFlags(
             MediaSessionCompat.FLAG_HANDLES_MEDIA_BUTTONS or
@@ -243,10 +246,11 @@ class HostMediaNotification(private val context: Context) {
         else -> left.contentEquals(right)
     }
 
-    private fun dispatchMediaAction(action: String) {
+    private fun dispatchMediaAction(action: String, positionMs: Long? = null) {
         val intent = Intent(context, QuavaService::class.java).apply {
             this.action = QuavaService.ACTION_MEDIA_CONTROL
             putExtra(QuavaService.EXTRA_MEDIA_ACTION, action)
+            positionMs?.let { putExtra(QuavaService.EXTRA_MEDIA_POSITION_MS, it) }
         }
         context.startService(intent)
     }

@@ -14,6 +14,9 @@ systemd: uinput
 	go build -o "$(HOME)/.local/bin/quava" ./cli
 	install -m 0644 systemd/quavad.service "$(HOME)/.config/systemd/user/quavad.service"
 	install -m 0644 systemd/quavad.socket "$(HOME)/.config/systemd/user/quavad.socket"
+
+# 	systemctl --user import-environment DISPLAY WAYLAND_DISPLAY XAUTHORITY XDG_RUNTIME_DIR XDG_SESSION_TYPE
+
 	systemctl --user daemon-reload
 	systemctl --user enable --now quavad.socket
 	systemctl --user restart quavad.service
