@@ -65,6 +65,12 @@ const (
 	// storage change. It needs no acknowledgement.
 	MessageTypeDeviceStatus = 0x35
 
+	// CallState is sent by the phone whenever an active cellular call starts
+	// or ends, so the host can mute/unmute its own audio. Acknowledged so the
+	// phone knows the mute actually took effect.
+	MessageTypeCallState    = 0x36
+	MessageTypeCallStateAck = 0x37
+
 	MessageTypeMultimedia      = 0x30
 	MessageTypeMultimediaAck   = 0x31
 	MessageTypeMultimediaState = 0x32

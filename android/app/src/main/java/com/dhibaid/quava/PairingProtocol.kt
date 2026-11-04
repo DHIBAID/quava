@@ -357,6 +357,11 @@ class PairingProtocol(private val appContext: Context) {
         writeMessage(session.output, Message(DISMISS_ANDROID_NOTIFICATION, session.transactionId, mapOf(1 to key)))
     }
 
+    /** Reports an active-call state change so the host can mute/unmute itself. */
+    internal fun sendCallState(session: RuntimeSession, inCall: Boolean) {
+        writeMessage(session.output, Message(CALL_STATE, session.transactionId, mapOf(0 to inCall)))
+    }
+
     // Remote input is asynchronous: the Android UI must never wait for the
     // host before it can process the next touch event. A fresh transaction ID
     // keeps its acknowledgement separate from the session handshake and ping
@@ -507,6 +512,10 @@ class PairingProtocol(private val appContext: Context) {
                 // Android notification forwarding is fire-and-forget so the
                 // listener never blocks the main notification pipeline.
                 NOTIFICATION_ACK -> Log.d("Quava", "Received Notification Sync ACK")
+
+                // Call-state reporting is fire-and-forget too; the else branch
+                // below would otherwise crash the session reader on this ack.
+                CALL_STATE_ACK -> Log.d("Quava", "Received Call State ACK")
 
                 INPUT_EVENT_ACK -> {
                     val accepted = message.payload[0] as? Boolean ?: false
@@ -851,6 +860,8 @@ class PairingProtocol(private val appContext: Context) {
         private const val INPUT_EVENT_ACK = 0x2fL
         private const val UNPAIR = 0x33L
         private const val DEVICE_STATUS = 0x35L
+        private const val CALL_STATE = 0x36L
+        private const val CALL_STATE_ACK = 0x37L
         private const val UNPAIR_ACK = 0x34L
         private const val MULTIMEDIA = 0x30L
         private const val MULTIMEDIA_ACK = 0x31L

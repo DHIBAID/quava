@@ -48,6 +48,8 @@ type Daemon struct {
 	connections          map[net.Conn]struct{}
 	watcher              *discovery.Watcher
 	sshService           *quavassh.SSHService
+	audioAutoMuted       bool // true while a phone call put the host's audio into a mute WE applied
+	audioWasMutedBefore  bool // the host's own mute state right before we auto-muted it
 }
 
 // startProfiling starts the profiling server and returns its shutdown function.

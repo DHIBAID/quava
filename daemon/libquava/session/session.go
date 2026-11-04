@@ -44,6 +44,7 @@ type Session struct {
 	readDone            chan error
 	closeNotification   func(uint32) error
 	androidNotification func(context.Context, models.AndroidNotificationContent) error
+	callMute            func(context.Context, bool) error
 	unpairHandler       func()
 	statusMu            sync.Mutex
 	deviceStatus        *models.DeviceStatus
@@ -458,6 +459,10 @@ func (s *Session) handleUnsolicited(ctx context.Context, msg protocol.Message) {
 		}
 	case protocol.MessageTypeDeviceStatus:
 		s.handleDeviceStatus(msg)
+	case protocol.MessageTypeCallState:
+		if err := s.handleCallState(ctx, msg); err != nil {
+			log.Printf("session: handle call state failed: %v", err)
+		}
 	case protocol.MessageTypeUnpair:
 		s.handleUnpair(ctx, msg)
 	case protocol.MessageTypeMultimedia:
@@ -501,6 +506,13 @@ func (s *Session) SetAndroidNotificationHandler(handler func(context.Context, mo
 // unpaired. It must be installed before the session is exposed.
 func (s *Session) SetUnpairHandler(handler func()) {
 	s.unpairHandler = handler
+}
+
+// SetCallMuteHandler installs the callback run when the phone reports its
+// active-call state changing; inCall is true when a call just became active.
+// It must be installed before the session is exposed.
+func (s *Session) SetCallMuteHandler(handler func(context.Context, bool) error) {
+	s.callMute = handler
 }
 
 // Unpair tells the peer to forget this host. The caller removes its own trust

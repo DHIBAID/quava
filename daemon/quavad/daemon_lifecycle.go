@@ -12,6 +12,7 @@ import (
 
 	"libquava/discovery"
 	"libquava/inputs"
+	"libquava/media"
 	lq "libquava/models"
 	"libquava/protocol"
 	"libquava/session"
@@ -44,6 +45,41 @@ func (d *Daemon) shutdown() {
 	if err := d.resetRemoteInput(); err != nil {
 		log.Printf("input: shutdown cleanup: %v", err)
 	}
+}
+
+// applyCallMute mutes or unmutes the host's default audio output in response
+// to the phone's active-call state. It remembers whether the host was
+// already muted before the call so ending the call restores that prior
+// state instead of always unmuting - otherwise a device the user had
+// deliberately muted would get unmuted out from under them.
+func (d *Daemon) applyCallMute(inCall bool) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	if inCall {
+		if d.audioAutoMuted {
+			return nil
+		}
+		state, err := media.SystemAudioState()
+		if err != nil {
+			return err
+		}
+		d.audioWasMutedBefore = state.Muted
+		d.audioAutoMuted = true
+		if state.Muted {
+			return nil
+		}
+		return media.SetOutputDeviceMuted("", true)
+	}
+
+	if !d.audioAutoMuted {
+		return nil
+	}
+	d.audioAutoMuted = false
+	if d.audioWasMutedBefore {
+		return nil
+	}
+	return media.SetOutputDeviceMuted("", false)
 }
 
 func (d *Daemon) connect(req models.Request, enc *json.Encoder) {
@@ -223,6 +259,9 @@ func (d *Daemon) runSession(ctx context.Context, identity lq.IdentityFile, peer 
 				return nil
 			}
 			return d.androidNotifications.Show(ctx, notification)
+		})
+		active.SetCallMuteHandler(func(_ context.Context, inCall bool) error {
+			return d.applyCallMute(inCall)
 		})
 	}, func(active *session.Session) {
 		if d.sshService != nil {

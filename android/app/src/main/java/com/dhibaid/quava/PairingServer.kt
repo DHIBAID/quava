@@ -38,6 +38,7 @@ class PairingServer(
     private val quavaService = context as? QuavaService
     private val statusCollector = DeviceStatusCollector(context)
     private var statusJob: Job? = null
+    private val callStateWatcher = CallStateWatcher(context)
     private val protocol = PairingProtocol(context.applicationContext)
     private val _state = MutableStateFlow(PairingState())
     val state: StateFlow<PairingState> = _state.asStateFlow()
@@ -250,6 +251,15 @@ class PairingServer(
                     quavaService?.onConnected(hostName)
                     sendMediaControl(MediaControl(MediaActions.STATE))
                     startStatusReports(session)
+                    callStateWatcher.start { inCall ->
+                        // The watcher invokes this on the main thread (it
+                        // registers with the main executor); never do the
+                        // blocking socket write there.
+                        scope.launch(Dispatchers.IO) {
+                            runCatching { protocol.sendCallState(session, inCall) }
+                                .onFailure { Log.w(TAG, "could not send call state", it) }
+                        }
+                    }
                 },
                 onPing = { quavaService?.onPing(peerName) },
 
@@ -276,6 +286,7 @@ class PairingServer(
             // A replacement connection may already be active when an older
             // session finishes. Do not let the old cleanup erase it.
             statusJob?.cancel()
+            callStateWatcher.stop()
             synchronized(lock) {
                 if (activeSession === session) activeSession = null
             }
