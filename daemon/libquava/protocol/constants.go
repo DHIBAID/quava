@@ -56,6 +56,12 @@ const (
 	MessageTypeInputEvent    = 0x2e
 	MessageTypeInputEventAck = 0x2f
 
+	// Funny comment on top because everything else has one.
+	MessageTypeMultimedia      = 0x30
+	MessageTypeMultimediaAck   = 0x31
+	MessageTypeMultimediaState = 0x32
+	// The above is the only one without an Ack pair, wow.
+
 	// Either side may send Unpair on an authenticated session to say "forget
 	// me". The receiver removes the sender's trust record and acknowledges.
 	MessageTypeUnpair    = 0x33
@@ -70,11 +76,6 @@ const (
 	// phone knows the mute actually took effect.
 	MessageTypeCallState    = 0x36
 	MessageTypeCallStateAck = 0x37
-
-	MessageTypeMultimedia      = 0x30
-	MessageTypeMultimediaAck   = 0x31
-	MessageTypeMultimediaState = 0x32
-	// The above is the only one without an Ack pair, wow.
 
 	// MultimediaStateUpdateType identifies whether a multimedia-state payload
 	// contains the complete state or only the current playback position.
