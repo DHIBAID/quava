@@ -69,6 +69,15 @@ func (c *Conn) Close() error {
 	return c.conn.Close()
 }
 
+// RemoteAddr returns the address of the peer connected to this protocol
+// session.
+func (c *Conn) RemoteAddr() net.Addr {
+	if c == nil || c.conn == nil {
+		return nil
+	}
+	return c.conn.RemoteAddr()
+}
+
 // EnableEncryption switches the connection to sealed frames. Everything written
 // afterwards is encrypted with sendKey and everything read is decrypted with
 // recvKey. Call it once, after authentication, before any other goroutine uses

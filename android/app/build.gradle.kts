@@ -49,6 +49,7 @@ dependencies {
     implementation("androidx.compose.material:material-icons-extended")
     implementation("androidx.media:media:1.7.0")
     implementation("io.coil-kt:coil-compose:2.7.0")
+    implementation("com.github.mwiede:jsch:0.2.23")
     testImplementation(libs.junit)
     androidTestImplementation(platform(libs.androidx.compose.bom))
     androidTestImplementation(libs.androidx.compose.ui.test.junit4)

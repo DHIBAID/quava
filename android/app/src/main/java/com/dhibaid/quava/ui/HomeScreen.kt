@@ -22,6 +22,7 @@ import androidx.compose.material.icons.filled.LinkOff
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.Mouse
+import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.NotificationsActive
 import androidx.compose.material3.AlertDialog
@@ -79,6 +80,7 @@ fun HomeScreen(
     onSettingsClick: () -> Unit = {},
     onRemoteControlClick: () -> Unit = {},
     onMediaControlClick: () -> Unit = {},
+    onTerminalClick: () -> Unit = {},
 ) {
     val state by server.state.collectAsStateWithLifecycle()
     val context = LocalContext.current
@@ -190,6 +192,13 @@ fun HomeScreen(
                             modifier = Modifier.weight(1f),
                         )
                     }
+                    FeatureTile(
+                        icon = Icons.Filled.Terminal,
+                        title = "Terminal",
+                        caption = "Run commands",
+                        onClick = onTerminalClick,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
                 } else if (!state.confirmationPending && !state.paired) {
                     HowToPairCard()
                 }

@@ -15,10 +15,16 @@ import (
 	lq "libquava/models"
 	"libquava/protocol"
 	"libquava/session"
+	quavassh "libquava/ssh"
 	"quavad/models"
 )
 
 func (d *Daemon) shutdown() {
+	if d.sshService != nil {
+		if err := d.sshService.Stop(); err != nil {
+			log.Printf("SSH shutdown cleanup: %v", err)
+		}
+	}
 	d.connMu.Lock()
 	for conn := range d.connections {
 		_ = conn.Close()
@@ -219,6 +225,9 @@ func (d *Daemon) runSession(ctx context.Context, identity lq.IdentityFile, peer 
 			return d.androidNotifications.Show(ctx, notification)
 		})
 	}, func(active *session.Session) {
+		if d.sshService != nil {
+			d.sshService.SetAllowedAddress(peer.PeerDeviceID, active.RemoteAddr())
+		}
 		d.mu.Lock()
 		if managed := d.sessions[peer.PeerDeviceID]; managed != nil {
 			managed.Active = active
@@ -230,6 +239,7 @@ func (d *Daemon) runSession(ctx context.Context, identity lq.IdentityFile, peer 
 			d.inputEnabled[peer.PeerDeviceID] = true
 		}
 		d.mu.Unlock()
+		d.startSSHService()
 	}, func(cause error) {
 		if cause != nil && !errors.Is(cause, context.Canceled) {
 			log.Printf("session: %s unavailable, will retry: %v", peer.PeerDeviceID, cause)
@@ -244,6 +254,10 @@ func (d *Daemon) runSession(ctx context.Context, identity lq.IdentityFile, peer 
 			d.inputEnabled[peer.PeerDeviceID] = false
 		}
 		d.mu.Unlock()
+		if d.sshService != nil {
+			d.sshService.RemoveAllowedAddress(peer.PeerDeviceID)
+		}
+		d.stopSSHServiceIfInactive()
 		if wasInputOwner {
 			if resetErr := d.resetRemoteInput(); resetErr != nil {
 				log.Printf("input: release state after session loss: %v", resetErr)
@@ -254,6 +268,33 @@ func (d *Daemon) runSession(ctx context.Context, identity lq.IdentityFile, peer 
 	}
 
 	d.clearSession(peer.PeerDeviceID)
+}
+
+func (d *Daemon) startSSHService() {
+	if d.sshService == nil {
+		return
+	}
+	if err := d.sshService.Start(d.ctx); err != nil && !errors.Is(err, quavassh.ErrAlreadyRunning) {
+		log.Printf("SSH service start failed: %v", err)
+	}
+}
+
+func (d *Daemon) stopSSHServiceIfInactive() {
+	d.mu.Lock()
+	active := false
+	for _, managed := range d.sessions {
+		if managed.Active != nil {
+			active = true
+			break
+		}
+	}
+	d.mu.Unlock()
+	if active || d.sshService == nil {
+		return
+	}
+	if err := d.sshService.Stop(); err != nil {
+		log.Printf("SSH service stop failed: %v", err)
+	}
 }
 
 // applyRemoteInput initializes the compositor backend on demand. A daemon can

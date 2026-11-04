@@ -27,6 +27,7 @@ data class PairingState(
     val confirmationPending: Boolean = false,
     val connected: Boolean = false,
     val hostName: String? = null,
+    val hostAddress: String? = null,
 )
 
 /** TCP server for both one-time pairing and authenticated runtime sessions. */
@@ -239,6 +240,9 @@ class PairingServer(
                         it.copy(
                             connected = true,
                             hostName = hostName,
+                            hostAddress = synchronized(lock) {
+                                activeSocket?.inetAddress?.hostAddress
+                            },
                             status = "Connected to: $hostName.",
                         )
                     }

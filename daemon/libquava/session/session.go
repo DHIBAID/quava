@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net"
 	"os"
 	"sync"
 	"time"
@@ -52,6 +53,14 @@ type Session struct {
 	eventQueue          chan inputJob
 	inputTokens         float64
 	inputLast           time.Time
+}
+
+// RemoteAddr returns the network address of the authenticated peer.
+func (s *Session) RemoteAddr() net.Addr {
+	if s == nil || s.conn == nil {
+		return nil
+	}
+	return s.conn.RemoteAddr()
 }
 
 func Connect(ctx context.Context, conn *protocol.Conn, identity models.IdentityFile, peer models.PairResult) (*Session, error) {

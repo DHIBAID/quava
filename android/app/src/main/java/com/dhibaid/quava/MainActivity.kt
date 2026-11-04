@@ -13,10 +13,12 @@ import androidx.activity.compose.setContent
 import androidx.activity.compose.BackHandler
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.*
+import androidx.lifecycle.lifecycleScope
 import androidx.core.content.ContextCompat
 import com.dhibaid.quava.ui.HomeScreen
 import com.dhibaid.quava.ui.RemoteControlScreen
 import com.dhibaid.quava.ui.MediaControlScreen
+import com.dhibaid.quava.ui.SshTerminalScreen
 import com.dhibaid.quava.ui.theme.QuavaTheme
 
 class MainActivity : ComponentActivity() {
@@ -72,6 +74,7 @@ class MainActivity : ComponentActivity() {
                         )
                     )
                 }
+                var terminalOpen by remember { mutableStateOf(false) }
                 val launcher = rememberLauncherForActivityResult(
                     ActivityResultContracts.RequestPermission()
                 ) { granted ->
@@ -130,6 +133,15 @@ class MainActivity : ComponentActivity() {
                             MediaControlScreen(server = it.server, onBack = { mediaControlOpen = false })
                         }
 
+                        terminalOpen -> {
+                            BackHandler { terminalOpen = false }
+                            SshTerminalScreen(
+                                server = it.server,
+                                scope = lifecycleScope,
+                                onBack = { terminalOpen = false },
+                            )
+                        }
+
                         settingsOpen -> {
                             com.dhibaid.quava.ui.NotificationSettingsScreen(
                                 onBack = { settingsOpen = false }
@@ -141,6 +153,7 @@ class MainActivity : ComponentActivity() {
                             onSettingsClick = { settingsOpen = true },
                             onRemoteControlClick = { remoteControlOpen = true },
                             onMediaControlClick = { mediaControlOpen = true },
+                            onTerminalClick = { terminalOpen = true },
                             onEnableNotificationAccess = {
                                 startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))
                             },

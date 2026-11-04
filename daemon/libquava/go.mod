@@ -3,6 +3,7 @@ module libquava
 go 1.27.1
 
 require (
+	github.com/creack/pty v1.1.24
 	github.com/fxamacker/cbor/v2 v2.10.0
 	github.com/godbus/dbus/v5 v5.2.4
 	golang.design/x/clipboard v0.11.0

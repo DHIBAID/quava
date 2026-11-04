@@ -25,6 +25,7 @@ import (
 
 	"libquava/profiling"
 	"libquava/session"
+	quavassh "libquava/ssh"
 	"quavad/models"
 )
 
@@ -46,6 +47,7 @@ type Daemon struct {
 	connMu               sync.Mutex
 	connections          map[net.Conn]struct{}
 	watcher              *discovery.Watcher
+	sshService           *quavassh.SSHService
 }
 
 // startProfiling starts the profiling server and returns its shutdown function.
@@ -113,6 +115,11 @@ func main() {
 		sessions:     map[string]*models.ManagedSession{},
 		inputEnabled: map[string]bool{},
 		connections:  map[net.Conn]struct{}{},
+	}
+	if service, err := quavassh.NewSSHServiceWithKey(":2222", filepath.Join(store.Dir(), "ssh_host_key")); err != nil {
+		log.Printf("SSH service unavailable: %v", err)
+	} else {
+		d.sshService = service
 	}
 
 	// CPU and Memory profiling, very helpful for spotting optimizations in the code.
