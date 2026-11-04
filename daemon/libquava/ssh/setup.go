@@ -179,7 +179,7 @@ func (s *SSHService) handleConnection(conn net.Conn) {
 		log.Printf("ssh handshake failed from %s: %v", conn.RemoteAddr(), err)
 		return
 	}
-	defer sshConn.Close()
+	defer func() { _ = sshConn.Close() }()
 	_ = conn.SetDeadline(time.Time{})
 
 	log.Printf(
@@ -252,7 +252,7 @@ func (s *SSHService) handleSession(
 	channel ssh.Channel,
 	requests <-chan *ssh.Request,
 ) {
-	defer channel.Close()
+	defer func() { _ = channel.Close() }()
 
 	var requestedPTY *ptyRequest
 

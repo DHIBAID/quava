@@ -50,7 +50,7 @@ func (s *SSHService) runPTYShell(channel ssh.Channel, requests <-chan *ssh.Reque
 		_, _ = fmt.Fprintf(channel, "Failed to create PTY: %v\n", err)
 		return
 	}
-	
+
 	defer func() {
 		_ = ptmx.Close()
 		_ = tty.Close()
