@@ -202,7 +202,7 @@ Need to see how the alternatives will work before we replace it in `libquava/not
 - [x] Multimedia Controls
 - [ ] Pre-saved command running
 - [ ] SFTP/SMB
-- [ ] SSH
+- [x] SSH
 - [ ] Exit Node/VPN
 - [ ] Screenshare/RDP
 - [ ] Password Manager(?)
