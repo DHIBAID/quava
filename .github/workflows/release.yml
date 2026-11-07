@@ -72,7 +72,7 @@ jobs:
       - name: Install build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential pkg-config libgtk-4-dev libjson-glib-dev libglib2.0-dev gettext-base
+          sudo apt-get install -y build-essential pkg-config libgtk-4-dev libjson-glib-dev libglib2.0-dev libglib2.0-bin gettext-base
 
       - name: Install nfpm
         run: go install github.com/goreleaser/nfpm/v2/cmd/nfpm@latest
@@ -92,12 +92,42 @@ jobs:
           nfpm package --config packaging/nfpm.rendered.yaml --packager deb --target "dist/quava-desktop_${VERSION}_amd64.deb"
           nfpm package --config packaging/nfpm.rendered.yaml --packager rpm --target "dist/quava-desktop_${VERSION}.x86_64.rpm"
 
+      - name: Install linuxdeploy + GTK plugin
+        working-directory: linux
+        run: |
+          curl -sSfLo linuxdeploy.AppImage https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
+          curl -sSfLo linuxdeploy-plugin-gtk.sh https://raw.githubusercontent.com/linuxdeploy/linuxdeploy-plugin-gtk/master/linuxdeploy-plugin-gtk.sh
+          chmod +x linuxdeploy.AppImage linuxdeploy-plugin-gtk.sh
+          # GitHub-hosted runners don't reliably support FUSE, so extract and
+          # run linuxdeploy directly instead of executing the AppImage itself.
+          ./linuxdeploy.AppImage --appimage-extract
+          mv squashfs-root linuxdeploy-squashfs
+
+      - name: Build AppImage
+        working-directory: linux
+        env:
+          DEPLOY_GTK_VERSION: "4"
+        run: |
+          VERSION="${VERSION#v}"
+          mkdir -p AppDir/usr/bin AppDir/usr/share/applications AppDir/usr/share/icons/hicolor/192x192/apps
+          cp build/quava AppDir/usr/bin/quava-gui
+          cp res/io.quava.Desktop.desktop AppDir/usr/share/applications/
+          cp res/icon.png AppDir/usr/share/icons/hicolor/192x192/apps/io.quava.Desktop.png
+          PATH="$PWD:$PATH" ./linuxdeploy-squashfs/AppRun \
+            --appdir AppDir \
+            --desktop-file AppDir/usr/share/applications/io.quava.Desktop.desktop \
+            --icon-file AppDir/usr/share/icons/hicolor/192x192/apps/io.quava.Desktop.png \
+            --plugin gtk \
+            --output appimage
+          mv Quava*.AppImage "dist/quava-desktop_${VERSION}-x86_64.AppImage"
+
       - uses: actions/upload-artifact@v7
         with:
           name: quava-desktop
           path: |
             linux/dist/*.deb
             linux/dist/*.rpm
+            linux/dist/*.AppImage
 
   android:
     name: Android APK

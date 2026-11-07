@@ -14,8 +14,8 @@ controls, remote input (touchpad and keyboard), ping/ring, and system volume.
 
 Tagged releases (`vX.Y.Z`, [SemVer](https://semver.org/)) are built automatically and
 published to [GitHub Releases](https://github.com/DHIBAID/quava/releases): daemon/CLI
-binaries (`amd64`/`arm64` tarballs), a `.deb`/`.rpm` for the desktop app, and a signed
-Android APK. See `.github/workflows/release.yml`.
+binaries (`amd64`/`arm64` tarballs), a `.deb`/`.rpm`/AppImage for the desktop app, and a
+signed Android APK. See `.github/workflows/release.yml`.
 
 ## Install on Linux
 
