@@ -1,0 +1,40 @@
+name: Feature request
+description: Suggest something Quava doesn't do yet.
+labels: ["qol"]
+body:
+  - type: dropdown
+    id: component
+    attributes:
+      label: Component
+      description: Which part of Quava would this affect?
+      options:
+        - daemon (quavad / quava CLI)
+        - linux-gui (desktop app)
+        - android
+        - cross-cutting / protocol
+        - not sure
+    validations:
+      required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem does this solve?
+      description: What can't you do today that this would let you do?
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: How do you imagine this working? Sketches/CLI examples welcome.
+    validations:
+      required: false
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+    validations:
+      required: false
