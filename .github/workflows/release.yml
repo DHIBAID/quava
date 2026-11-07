@@ -105,6 +105,12 @@ jobs:
           java-version: "21"
 
       - uses: android-actions/setup-android@v3
+        with:
+          # Override the action's default ("tools platform-tools") — the
+          # legacy "tools" package no longer exists in the SDK repo. AGP
+          # auto-downloads the platform/build-tools it needs during the
+          # Gradle build below, now that licenses are accepted.
+          packages: platform-tools
 
       - name: Decode release keystore
         env:
