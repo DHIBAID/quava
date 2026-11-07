@@ -59,7 +59,10 @@ jobs:
 
   linux-desktop:
     name: Linux desktop app
-    runs-on: ubuntu-latest
+    # Pinned to an older LTS image (not ubuntu-latest) so the binary links
+    # against an older glibc — keeps the .deb/.rpm/AppImage runnable on
+    # distros that aren't on this year's bleeding-edge glibc.
+    runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v7
 
