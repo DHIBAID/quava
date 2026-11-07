@@ -61,7 +61,7 @@ dependencies {
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)
     implementation("androidx.compose.material:material-icons-extended")
-    implementation("androidx.media:media:1.7.0")
+    implementation("androidx.media:media:1.8.0")
     implementation("io.coil-kt:coil-compose:2.7.0")
     implementation("com.github.mwiede:jsch:2.28.8")
     testImplementation(libs.junit)
