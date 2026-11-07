@@ -48,19 +48,19 @@ jobs:
           (cd quavad && go vet ./...)
 
       - name: golangci-lint (cli)
-        uses: golangci/golangci-lint-action@v8
+        uses: golangci/golangci-lint-action@v9
         with:
           working-directory: daemon/cli
           args: --timeout=5m
 
       - name: golangci-lint (libquava)
-        uses: golangci/golangci-lint-action@v8
+        uses: golangci/golangci-lint-action@v9
         with:
           working-directory: daemon/libquava
           args: --timeout=5m
 
       - name: golangci-lint (quavad)
-        uses: golangci/golangci-lint-action@v8
+        uses: golangci/golangci-lint-action@v9
         with:
           working-directory: daemon/quavad
           args: --timeout=5m
