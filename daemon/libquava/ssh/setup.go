@@ -72,7 +72,7 @@ func (s *SSHService) RemoveAllowedAddress(peerID string) {
 func NewSSHServiceWithKey(listenAddr, keyPath string) (*SSHService, error) {
 	signer, err := loadOrGenerateKey(keyPath)
 	if err != nil {
-		return nil, fmt.Errorf("SSH host key: %w", err)
+		return nil, fmt.Errorf("ssh: load host key: %w", err)
 	}
 
 	config := &ssh.ServerConfig{NoClientAuth: true}
@@ -83,7 +83,7 @@ func NewSSHServiceWithKey(listenAddr, keyPath string) (*SSHService, error) {
 // Start starts the SSH server and returns once its listener is ready.
 func (s *SSHService) Start(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
-		return fmt.Errorf("SSH start canceled: %w", err)
+		return fmt.Errorf("ssh: start canceled: %w", err)
 	}
 	if s.config == nil {
 		return errors.New("ssh service has no server configuration")
@@ -98,7 +98,7 @@ func (s *SSHService) Start(ctx context.Context) error {
 	listener, err := net.Listen("tcp", s.listenAddr)
 	if err != nil {
 		s.mu.Unlock()
-		return fmt.Errorf("SSH listen failed: %w", err)
+		return fmt.Errorf("ssh: listen: %w", err)
 	}
 	s.listener = listener
 	s.mu.Unlock()
@@ -152,7 +152,7 @@ func (s *SSHService) Stop() error {
 		return nil
 	}
 	if err := listener.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
-		return fmt.Errorf("SSH stop failed: %w", err)
+		return fmt.Errorf("ssh: stop: %w", err)
 	}
 	log.Printf("SSH server stopped")
 	return nil

@@ -12,7 +12,7 @@ One style everywhere, so an error reads the same in the log, the CLI and the app
 
 Components in Go are the package or subsystem: `session`, `config`, `protocol`,
 `discovery`, `crypto`, `pairing`, `mpris`, `audio`, `artwork`, `uinput`,
-`remote input`, `clipboard`, `media`, `profiling`.
+`remote input`, `clipboard`, `media`, `profiling`, `ssh`, `ipc`, `pair`.
 
 Where the message ends up:
 

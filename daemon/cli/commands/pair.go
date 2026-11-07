@@ -45,12 +45,12 @@ func pair(peerDeviceID string, timeout time.Duration) error {
 	decoder := json.NewDecoder(connection)
 
 	if err := encoder.Encode(models.Request{Command: "pair", PeerDeviceID: peerDeviceID, TimeoutMS: timeout.Milliseconds()}); err != nil {
-		return fmt.Errorf("send request: %w", err)
+		return fmt.Errorf("pair: send request: %w", err)
 	}
 
 	var res models.Response
 	if err := decoder.Decode(&res); err != nil {
-		return fmt.Errorf("read reply: %w", err)
+		return fmt.Errorf("pair: read reply: %w", err)
 	}
 	if res.Error != "" {
 		return errors.New(res.Error)
@@ -63,19 +63,19 @@ func pair(peerDeviceID string, timeout time.Duration) error {
 
 	line, err := bufio.NewReader(os.Stdin).ReadString('\n')
 	if err != nil && line == "" {
-		return fmt.Errorf("read confirmation: %w", err)
+		return fmt.Errorf("pair: read confirmation: %w", err)
 	}
 
 	answer := strings.ToLower(strings.TrimSpace(line))
 	accepted := answer == "y" || answer == "yes"
 
 	if err := encoder.Encode(models.Request{Command: "confirm_pairing", Confirm: &accepted}); err != nil {
-		return fmt.Errorf("send confirmation: %w", err)
+		return fmt.Errorf("pair: send confirmation: %w", err)
 	}
 
 	res = models.Response{}
 	if err := decoder.Decode(&res); err != nil {
-		return fmt.Errorf("read confirmation reply: %w", err)
+		return fmt.Errorf("pair: read confirmation reply: %w", err)
 	}
 	if res.Error != "" {
 		return errors.New(res.Error)
