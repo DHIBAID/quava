@@ -59,10 +59,12 @@ jobs:
 
   linux-desktop:
     name: Linux desktop app
-    # Pinned to an older LTS image (not ubuntu-latest) so the binary links
-    # against an older glibc — keeps the .deb/.rpm/AppImage runnable on
-    # distros that aren't on this year's bleeding-edge glibc.
-    runs-on: ubuntu-22.04
+    # Pinned (not ubuntu-latest, which floats forward and currently means a
+    # very new Ubuntu with glibc 2.43 — too new to run on most real systems)
+    # to a fixed LTS image old enough for broad glibc compatibility but new
+    # enough to have the GTK 4.8+/4.10+ APIs this code uses (22.04's GTK 4.6
+    # is too old: no gtk_widget_get_color, no gtk_picture_set_content_fit).
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
 
