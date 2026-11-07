@@ -13,10 +13,23 @@ android {
         applicationId = "com.dhibaid.quava"
         minSdk = 24
         targetSdk = 37
-        versionCode = 1
-        versionName = "1.0"
+        // Overridable by CI via -PquavaVersionCode/-PquavaVersionName so release
+        // builds carry the tag's version instead of this fallback.
+        versionCode = (project.findProperty("quavaVersionCode") as String?)?.toInt() ?: 1
+        versionName = project.findProperty("quavaVersionName") as String? ?: "1.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+    }
+
+    // Populated from env vars in CI (see .github/workflows/release.yml). Left
+    // unset for local builds, where only assembleDebug is normally used.
+    signingConfigs {
+        create("release") {
+            System.getenv("QUAVA_RELEASE_KEYSTORE")?.let { storeFile = file(it) }
+            storePassword = System.getenv("QUAVA_RELEASE_KEYSTORE_PASSWORD")
+            keyAlias = System.getenv("QUAVA_RELEASE_KEY_ALIAS")
+            keyPassword = System.getenv("QUAVA_RELEASE_KEY_PASSWORD")
+        }
     }
 
     buildTypes {
@@ -24,6 +37,7 @@ android {
             optimization {
                 enable = false
             }
+            signingConfig = signingConfigs.getByName("release")
         }
     }
     compileOptions {

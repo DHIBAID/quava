@@ -8,3 +8,4 @@ compile_commands.json
 # we need to track the actual library, but not the build artifacts
 !libquava/
 build/
+quava-release.jks
