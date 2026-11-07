@@ -20,11 +20,15 @@ jobs:
       matrix:
         arch: [amd64, arm64]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
           go-version-file: daemon/go.work
+          cache-dependency-path: |
+            daemon/quavad/go.sum
+            daemon/cli/go.sum
+            daemon/libquava/go.sum
 
       - name: Build binaries
         working-directory: daemon
@@ -48,7 +52,7 @@ jobs:
           cp ../LICENSE ../readme.md "$PKG/"
           tar czf "${PKG}.tar.gz" "$PKG"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: quava-daemon-${{ matrix.arch }}
           path: daemon/quava-daemon_*.tar.gz
@@ -57,11 +61,13 @@ jobs:
     name: Linux desktop app
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
           go-version: stable
+          # No go.sum of ours is relevant here (this only `go install`s nfpm).
+          cache: false
 
       - name: Install build dependencies
         run: |
@@ -86,7 +92,7 @@ jobs:
           nfpm package --config packaging/nfpm.rendered.yaml --packager deb --target "dist/quava-desktop_${VERSION}_amd64.deb"
           nfpm package --config packaging/nfpm.rendered.yaml --packager rpm --target "dist/quava-desktop_${VERSION}.x86_64.rpm"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: quava-desktop
           path: |
@@ -97,14 +103,14 @@ jobs:
     name: Android APK
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: "21"
 
-      - uses: android-actions/setup-android@v3
+      - uses: android-actions/setup-android@v4
         with:
           # Override the action's default ("tools platform-tools") — the
           # legacy "tools" package no longer exists in the SDK repo. AGP
@@ -136,7 +142,7 @@ jobs:
           mkdir -p android/dist
           cp android/app/build/outputs/apk/release/app-release.apk "android/dist/quava_${VERSION}.apk"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: quava-android
           path: android/dist/*.apk
@@ -150,12 +156,12 @@ jobs:
     needs: [daemon-cli, linux-desktop, android]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           path: dist
           merge-multiple: true
 
-      - uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@v3
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
