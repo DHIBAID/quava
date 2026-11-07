@@ -1,0 +1,124 @@
+name: CI
+
+on:
+  pull_request:
+    branches: ["main"]
+  push:
+    branches: ["main"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  daemon:
+    name: Daemon lint + build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: daemon/go.work
+          cache-dependency-path: |
+            daemon/quavad/go.sum
+            daemon/cli/go.sum
+            daemon/libquava/go.sum
+
+      - name: Install staticcheck + deadcode
+        run: |
+          go install honnef.co/go/tools/cmd/staticcheck@latest
+          go install golang.org/x/tools/cmd/deadcode@latest
+
+      - name: gofmt check
+        working-directory: daemon
+        run: |
+          out="$(gofmt -l cli libquava quavad)"
+          if [ -n "$out" ]; then
+            echo "The following files are not gofmt'd:"
+            echo "$out"
+            exit 1
+          fi
+
+      - name: go vet
+        working-directory: daemon
+        run: |
+          (cd cli && go vet ./...)
+          (cd libquava && go vet ./...)
+          (cd quavad && go vet ./...)
+
+      - name: golangci-lint (cli)
+        uses: golangci/golangci-lint-action@v8
+        with:
+          working-directory: daemon/cli
+          args: --timeout=5m
+
+      - name: golangci-lint (libquava)
+        uses: golangci/golangci-lint-action@v8
+        with:
+          working-directory: daemon/libquava
+          args: --timeout=5m
+
+      - name: golangci-lint (quavad)
+        uses: golangci/golangci-lint-action@v8
+        with:
+          working-directory: daemon/quavad
+          args: --timeout=5m
+
+      - name: staticcheck
+        working-directory: daemon
+        run: |
+          (cd cli && staticcheck ./...)
+          (cd libquava && staticcheck ./...)
+          (cd quavad && staticcheck ./...)
+
+      - name: deadcode
+        working-directory: daemon/quavad
+        run: |
+          out="$(deadcode ./... ../libquava/...)"
+          if [ -n "$out" ]; then
+            echo "$out"
+            exit 1
+          fi
+
+      - name: Build
+        working-directory: daemon
+        run: |
+          (cd quavad && go build ./...)
+          (cd cli && go build ./...)
+
+  linux-desktop:
+    name: Linux desktop build
+    # Same pin as release.yml: ubuntu-24.04 has new-enough GTK (4.8+/4.10+ APIs
+    # this code uses) without the glibc version ubuntu-latest currently floats to.
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential pkg-config libgtk-4-dev libjson-glib-dev libglib2.0-dev libglib2.0-bin gettext-base
+
+      - name: Build
+        working-directory: linux
+        run: make build
+
+  android:
+    name: Android build (debug)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - uses: android-actions/setup-android@v4
+        with:
+          packages: platform-tools
+
+      - name: Assemble debug APK
+        working-directory: android
+        run: ./gradlew assembleDebug
