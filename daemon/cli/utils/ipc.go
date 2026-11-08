@@ -55,7 +55,7 @@ func Call(req models.Request) (models.Response, error) {
 	}
 
 	if err := json.NewEncoder(connection).Encode(req); err != nil {
-		return res, fmt.Errorf("send request: %w", err)
+		return res, fmt.Errorf("ipc: send request: %w", err)
 	}
 
 	if err := json.NewDecoder(connection).Decode(&res); err != nil {
@@ -63,7 +63,7 @@ func Call(req models.Request) (models.Response, error) {
 		if errors.As(err, &netErr) && netErr.Timeout() {
 			return res, fmt.Errorf("quavad did not respond within %s (it may be stuck): see systemctl --user status quavad and journalctl --user -u quavad", replyTimeout)
 		}
-		return res, fmt.Errorf("read reply: %w", err)
+		return res, fmt.Errorf("ipc: read reply: %w", err)
 	}
 
 	if res.Error != "" {
