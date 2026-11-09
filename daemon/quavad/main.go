@@ -80,6 +80,10 @@ func startProfiling() func() {
 	}
 }
 
+func profilingEnabled() bool {
+	return os.Getenv("QUAVA_ENABLE_PPROF") == "1"
+}
+
 func main() {
 	runCtx, stopSignals := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stopSignals()
@@ -124,8 +128,11 @@ func main() {
 		d.sshService = service
 	}
 
-	// CPU and Memory profiling, very helpful for spotting optimizations in the code.
-	defer startProfiling()()
+	// pprof exposes process memory and goroutines to other local users, so
+	// enable its HTTP listener only when explicitly requested for debugging.
+	if profilingEnabled() {
+		defer startProfiling()()
+	}
 
 	if err := session.StartMedia(runCtx); err != nil {
 		log.Printf("mpris: service unavailable: %v", err)

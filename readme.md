@@ -56,6 +56,13 @@ Look at the daemon's logs:
 journalctl --user -u quavad.service -f -n 50
 ```
 
+The daemon's HTTP pprof debugger is **disabled by default** because profiling
+endpoints expose process memory to other local users. For a temporary debugging
+session, run `QUAVA_ENABLE_PPROF=1 quavad` (or set
+`Environment=QUAVA_ENABLE_PPROF=1` in a temporary systemd user-service override
+and restart the service). This opt-in serves pprof on `127.0.0.1:6060`; unset
+the variable and restart the daemon when finished.
+
 The user systemd unit needs the graphical-session environment. If remote input says
 no desktop session is available, run this from your desktop session and restart the
 service:
