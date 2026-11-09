@@ -47,7 +47,6 @@ import androidx.compose.foundation.text.BasicTextField
 import com.dhibaid.quava.PairingServer
 import com.dhibaid.quava.RemoteInput
 import kotlin.math.abs
-import android.util.Log
 
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -145,10 +144,6 @@ fun RemoteControlScreen(server: PairingServer, onBack: () -> Unit) {
                 BasicTextField(
                     value = editorValue,
                     onValueChange = { updated ->
-                        Log.d(
-                            "QuavaRemoteInput",
-                            "editor update: text=${updated.text}, composition=${updated.composition}"
-                        )
                         if (updated.composition != null) {
                             editorValue = updated
                         } else {
