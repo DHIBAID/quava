@@ -16,8 +16,11 @@ var Root = &cobra.Command{
 	SilenceUsage:  true,
 	SilenceErrors: true,
 
-	Run: func(_ *cobra.Command, args []string) {
-		fmt.Println("Quava works.")
+	// Running `quava` on its own answers with the basic usage line and a pointer
+	// to the full command list, which stays behind `quava --help`.
+	Run: func(cmd *cobra.Command, _ []string) {
+		const usage = "Usage:\n  quava [command]\n\nRun 'quava --help' for the full list of commands.\n"
+		_, _ = fmt.Fprint(cmd.OutOrStdout(), usage)
 	},
 }
 
