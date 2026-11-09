@@ -80,10 +80,6 @@ func startProfiling() func() {
 	}
 }
 
-func profilingEnabled() bool {
-	return os.Getenv("QUAVA_ENABLE_PPROF") == "1"
-}
-
 func main() {
 	runCtx, stopSignals := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stopSignals()
@@ -130,7 +126,7 @@ func main() {
 
 	// pprof exposes process memory and goroutines to other local users, so
 	// enable its HTTP listener only when explicitly requested for debugging.
-	if profilingEnabled() {
+	if os.Getenv("QUAVA_ENABLE_PPROF") == "1" {
 		defer startProfiling()()
 	}
 
