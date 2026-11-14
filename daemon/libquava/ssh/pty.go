@@ -30,7 +30,7 @@ type windowChangeRequest struct {
 }
 
 // runPTYShell starts an interactive login shell attached to a PTY.
-func (s *SSHService) runPTYShell(channel ssh.Channel, requests <-chan *ssh.Request, initial ptyRequest) {
+func runPTYShell(channel ssh.Channel, requests <-chan *ssh.Request, initial ptyRequest) {
 	shell := os.Getenv("SHELL")
 	if shell == "" {
 		shell = "/bin/bash"
@@ -104,28 +104,44 @@ func (s *SSHService) runPTYShell(channel ssh.Channel, requests <-chan *ssh.Reque
 		_, _ = io.Copy(ptmx, channel)
 	}()
 
-	// Handle terminal resize requests while the shell is running.
+	// Handle terminal resize requests while the shell is running. stopResize
+	// must be closed, and resizeDone awaited, before ptmx.Close() below -
+	// otherwise a window-change request can still be calling pty.Setsize on
+	// ptmx concurrently with it being closed (a real data race, not just in
+	// theory: it reproduces under `go test -race` once something actually
+	// drives a resize near shutdown).
+	stopResize := make(chan struct{})
+	resizeDone := make(chan struct{})
 	go func() {
-		for req := range requests {
-			switch req.Type {
-			case "window-change":
-				var size windowChangeRequest
-				if err := ssh.Unmarshal(req.Payload, &size); err != nil {
-					continue
+		defer close(resizeDone)
+		for {
+			select {
+			case req, ok := <-requests:
+				if !ok {
+					return
 				}
+				switch req.Type {
+				case "window-change":
+					var size windowChangeRequest
+					if err := ssh.Unmarshal(req.Payload, &size); err != nil {
+						continue
+					}
 
-				err := pty.Setsize(ptmx, &pty.Winsize{
-					Cols: uint16(nonZeroDimension(size.Cols)),
-					Rows: uint16(nonZeroDimension(size.Rows)),
-					X:    uint16(size.Width),
-					Y:    uint16(size.Height),
-				})
-				if err != nil {
-					log.Printf("SSH PTY resize failed: %v", err)
+					err := pty.Setsize(ptmx, &pty.Winsize{
+						Cols: uint16(nonZeroDimension(size.Cols)),
+						Rows: uint16(nonZeroDimension(size.Rows)),
+						X:    uint16(size.Width),
+						Y:    uint16(size.Height),
+					})
+					if err != nil {
+						log.Printf("SSH PTY resize failed: %v", err)
+					}
+
+				default:
+					_ = req.Reply(false, nil)
 				}
-
-			default:
-				_ = req.Reply(false, nil)
+			case <-stopResize:
+				return
 			}
 		}
 	}()
@@ -148,6 +164,8 @@ func (s *SSHService) runPTYShell(channel ssh.Channel, requests <-chan *ssh.Reque
 		}
 	}
 
+	close(stopResize)
+	<-resizeDone
 	_ = channel.Close()
 	_ = ptmx.Close()
 	wg.Wait()

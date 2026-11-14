@@ -37,6 +37,7 @@ type file struct {
 	ClipboardSync    map[string]bool                      `yaml:"clipboard_sync,omitempty"`
 	InputAuto        map[string]bool                      `yaml:"input_auto,omitempty"`
 	AutoConnectOff   map[string]bool                      `yaml:"auto_connect_off,omitempty"`
+	SSHAllowed       map[string]bool                      `yaml:"ssh_allowed,omitempty"`
 	NotifFilters     models.NotificationFilters           `yaml:"notification_filters,omitempty"`
 }
 
@@ -101,6 +102,9 @@ func Open(storageDir string) (*Store, error) {
 		}
 		if store.data.AutoConnectOff == nil {
 			store.data.AutoConnectOff = map[string]bool{}
+		}
+		if store.data.SSHAllowed == nil {
+			store.data.SSHAllowed = map[string]bool{}
 		}
 
 		return store, nil
@@ -274,6 +278,7 @@ func (s *Store) RemoveDevice(deviceID string) error {
 	delete(s.data.ClipboardSync, deviceID)
 	delete(s.data.InputAuto, deviceID)
 	delete(s.data.AutoConnectOff, deviceID)
+	delete(s.data.SSHAllowed, deviceID)
 	return nil
 }
 
@@ -327,6 +332,37 @@ func (s *Store) SetInputAuto(deviceID string, enabled bool) error {
 		s.data.InputAuto = map[string]bool{}
 	}
 	s.data.InputAuto[deviceID] = enabled
+	return nil
+}
+
+// SSHAllowed reports whether the peer may open an SSH tunnel. It defaults to
+// false: a full remote shell is higher-stakes than the other paired
+// capabilities, so a new device must be allowed explicitly.
+func (s *Store) SSHAllowed(deviceID string) bool {
+	if s == nil {
+		return false
+	}
+
+	return s.data.SSHAllowed[strings.ToLower(strings.TrimSpace(deviceID))]
+}
+
+// SetSSHAllowed remembers whether a paired peer may open an SSH tunnel. Call
+// Save to persist it.
+func (s *Store) SetSSHAllowed(deviceID string, enabled bool) error {
+	deviceID = strings.ToLower(strings.TrimSpace(deviceID))
+	if deviceID == "" {
+		return errors.New("config: paired device has no device ID")
+	}
+
+	if _, ok := s.data.Devices[deviceID]; !ok {
+		return fmt.Errorf("config: device %q is not paired", deviceID)
+	}
+
+	if s.data.SSHAllowed == nil {
+		s.data.SSHAllowed = map[string]bool{}
+	}
+
+	s.data.SSHAllowed[deviceID] = enabled
 	return nil
 }
 
@@ -467,6 +503,14 @@ func validateConfig(data file) error {
 		}
 		if _, ok := data.Devices[id]; !ok {
 			return fmt.Errorf("remote input setting references unknown device %q", id)
+		}
+	}
+	for id := range data.SSHAllowed {
+		if strings.ToLower(strings.TrimSpace(id)) != id {
+			return fmt.Errorf("invalid ssh setting for device %q", id)
+		}
+		if _, ok := data.Devices[id]; !ok {
+			return fmt.Errorf("ssh setting references unknown device %q", id)
 		}
 	}
 	return nil

@@ -2,5 +2,4 @@
 <!-- Legacy Auto Backup: exclude the same sensitive preferences on older Android. -->
 <full-backup-content>
     <exclude domain="sharedpref" path="quava-pairing.xml" />
-    <exclude domain="sharedpref" path="quava-ssh.xml" />
 </full-backup-content>

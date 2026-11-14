@@ -7,6 +7,11 @@ const DefaultMaxFrameSize = 64 * 1024
 const (
 	MaxClipboardBytes = 48 * 1024
 	MaxArtworkBytes   = 48 * 1024
+
+	// SSHDataChunkSize bounds a single SSHData payload. It stays well under
+	// DefaultMaxFrameSize once CBOR map/key overhead and the AEAD tag are
+	// accounted for.
+	SSHDataChunkSize = 32 * 1024
 )
 
 const (
@@ -76,6 +81,21 @@ const (
 	// phone knows the mute actually took effect.
 	MessageTypeCallState    = 0x36
 	MessageTypeCallStateAck = 0x37
+
+	// SSH carries a full interactive shell over the already-authenticated,
+	// encrypted session instead of opening its own listening socket. Open
+	// carries a connection-scoped ephemeral public key that is the *only*
+	// key a freshly built, single-use ssh.ServerConfig will ever accept;
+	// Data chunks a continuous PTY byte stream through discrete frames;
+	// Close ends the tunnel from either side. There is no SSHDataAck or
+	// SSHCloseAck: the underlying pipe's own blocking backpressure is the
+	// flow control. All Data/Close frames for one tunnel reuse the Open
+	// message's TransactionID, so stray frames from a torn-down tunnel are
+	// trivially rejected.
+	MessageTypeSSHOpen    = 0x38
+	MessageTypeSSHOpenAck = 0x39
+	MessageTypeSSHData    = 0x3a
+	MessageTypeSSHClose   = 0x3b
 
 	// MultimediaStateUpdateType identifies whether a multimedia-state payload
 	// contains the complete state or only the current playback position.

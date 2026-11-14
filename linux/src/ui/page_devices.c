@@ -83,18 +83,18 @@ static GtkWidget* stat_pill(GtkWidget* icon, const gchar* text, const gchar* css
 
 static const gchar* level_word(gint64 level) {
 	switch (level) {
-	case 4:
-		return "Excellent";
-	case 3:
-		return "Good";
-	case 2:
-		return "Fair";
-	case 1:
-		return "Weak";
-	case 0:
-		return "Very weak";
-	default:
-		return "";
+		case 4:
+			return "Excellent";
+		case 3:
+			return "Good";
+		case 2:
+			return "Fair";
+		case 1:
+			return "Weak";
+		case 0:
+			return "Very weak";
+		default:
+			return "";
 	}
 }
 
@@ -205,8 +205,7 @@ static void connect_clicked(GtkButton* button, gpointer data) {
 
 	gboolean connected = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(button), "connected"));
 
-	devices_action(connected ? "disconnect" : "connect", g_object_get_data(G_OBJECT(button), "device-id"),
-				   connected ? "Disconnected" : "Connecting…");
+	devices_action(connected ? "disconnect" : "connect", g_object_get_data(G_OBJECT(button), "device-id"), connected ? "Disconnected" : "Connecting…");
 }
 
 static GtkWidget* device_card(JsonObject* device, JsonObject* status, gboolean connected) {
@@ -294,8 +293,7 @@ static void on_devices(QuavaIpcReply* reply, gpointer data) {
 			g_clear_pointer(&page->last, json_object_unref);
 			q_clear_box(page->paired_box);
 			gtk_box_append(GTK_BOX(page->paired_box),
-						   q_empty_state(Q_ICON_PHONE, "Can't reach the Quava daemon",
-										 "Start it with: systemctl --user start quavad"));
+						   q_empty_state(Q_ICON_PHONE, "Can't reach the Quava daemon", "Start it with: systemctl --user start quavad"));
 			notify_listeners(NULL);
 		}
 		return;
@@ -347,8 +345,7 @@ static void on_devices(QuavaIpcReply* reply, gpointer data) {
 
 	if (g_hash_table_size(page->paired_ids) == 0)
 		gtk_box_append(GTK_BOX(page->paired_box),
-					   q_empty_state(Q_ICON_PHONE, "No paired devices yet",
-									 "Open Quava on your phone, then use Find devices below."));
+					   q_empty_state(Q_ICON_PHONE, "No paired devices yet", "Open Quava on your phone, then use Find devices below."));
 
 	g_hash_table_unref(connected);
 	notify_listeners(page->last);
@@ -424,8 +421,7 @@ static void on_discovered(QuavaIpcReply* reply, gpointer data) {
 	JsonArray* found = q_json_array(reply->object, "discovered");
 	if (found == NULL || json_array_get_length(found) == 0) {
 		gtk_box_append(GTK_BOX(page->nearby_box),
-					   q_empty_state(Q_ICON_SEARCH, "Nothing found",
-									 "Make sure Quava is open on your phone and both are on the same network."));
+					   q_empty_state(Q_ICON_SEARCH, "Nothing found", "Make sure Quava is open on your phone and both are on the same network."));
 		return;
 	}
 

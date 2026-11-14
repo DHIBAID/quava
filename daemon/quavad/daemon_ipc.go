@@ -137,6 +137,12 @@ func (d *Daemon) handle(connection net.Conn) {
 	case "input-auto-off":
 		d.setInputAuto(req, encoder, false)
 
+	case "ssh-enable":
+		d.setSSHAllowed(req, encoder, true)
+
+	case "ssh-disable":
+		d.setSSHAllowed(req, encoder, false)
+
 	case "notif-sync-both":
 		d.setNotificationSync(req, encoder, config.NotificationSyncBoth)
 
@@ -176,6 +182,7 @@ func (d *Daemon) devices(req models.Request, enc *json.Encoder) {
 				InputEnabled:     d.inputEnabled[id] && d.inputOwner == id,
 				InputAuto:        d.store.InputAuto(id),
 				AutoConnect:      d.store.AutoConnect(id),
+				SSHAllowed:       d.store.SSHAllowed(id),
 			}
 		}
 		status := make(map[string]lq.DeviceStatus)

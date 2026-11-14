@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"time"
 
@@ -16,16 +17,10 @@ import (
 	lq "libquava/models"
 	"libquava/protocol"
 	"libquava/session"
-	quavassh "libquava/ssh"
 	"quavad/models"
 )
 
 func (d *Daemon) shutdown() {
-	if d.sshService != nil {
-		if err := d.sshService.Stop(); err != nil {
-			log.Printf("SSH shutdown cleanup: %v", err)
-		}
-	}
 	d.connMu.Lock()
 	for conn := range d.connections {
 		_ = conn.Close()
@@ -263,10 +258,20 @@ func (d *Daemon) runSession(ctx context.Context, identity lq.IdentityFile, peer 
 		active.SetCallMuteHandler(func(_ context.Context, inCall bool) error {
 			return d.applyCallMute(inCall)
 		})
+		active.SetSSHOpenHandler(func(sshCtx context.Context, req session.SSHOpenRequest) (io.ReadWriteCloser, [32]byte, error) {
+			d.mu.Lock()
+			allowed := d.store.SSHAllowed(peer.PeerDeviceID)
+			d.mu.Unlock()
+			if !allowed {
+				return nil, [32]byte{}, errors.New("ssh access is not enabled for this device")
+			}
+			if d.sshService == nil {
+				return nil, [32]byte{}, errors.New("ssh service unavailable")
+			}
+			return d.sshService.OpenTunnel(sshCtx, req.ClientPublicKey)
+		})
 	}, func(active *session.Session) {
-		if d.sshService != nil {
-			d.sshService.SetAllowedAddress(peer.PeerDeviceID, active.RemoteAddr())
-		}
+		log.Printf("session: %s connected from %s", peer.PeerDeviceID, active.RemoteAddr())
 		d.mu.Lock()
 		if managed := d.sessions[peer.PeerDeviceID]; managed != nil {
 			managed.Active = active
@@ -278,7 +283,6 @@ func (d *Daemon) runSession(ctx context.Context, identity lq.IdentityFile, peer 
 			d.inputEnabled[peer.PeerDeviceID] = true
 		}
 		d.mu.Unlock()
-		d.startSSHService()
 	}, func(cause error) {
 		if cause != nil && !errors.Is(cause, context.Canceled) {
 			log.Printf("session: %s unavailable, will retry: %v", peer.PeerDeviceID, cause)
@@ -293,10 +297,6 @@ func (d *Daemon) runSession(ctx context.Context, identity lq.IdentityFile, peer 
 			d.inputEnabled[peer.PeerDeviceID] = false
 		}
 		d.mu.Unlock()
-		if d.sshService != nil {
-			d.sshService.RemoveAllowedAddress(peer.PeerDeviceID)
-		}
-		d.stopSSHServiceIfInactive()
 		if wasInputOwner {
 			if resetErr := d.resetRemoteInput(); resetErr != nil {
 				log.Printf("input: release state after session loss: %v", resetErr)
@@ -307,33 +307,6 @@ func (d *Daemon) runSession(ctx context.Context, identity lq.IdentityFile, peer 
 	}
 
 	d.clearSession(peer.PeerDeviceID)
-}
-
-func (d *Daemon) startSSHService() {
-	if d.sshService == nil {
-		return
-	}
-	if err := d.sshService.Start(d.ctx); err != nil && !errors.Is(err, quavassh.ErrAlreadyRunning) {
-		log.Printf("SSH service start failed: %v", err)
-	}
-}
-
-func (d *Daemon) stopSSHServiceIfInactive() {
-	d.mu.Lock()
-	active := false
-	for _, managed := range d.sessions {
-		if managed.Active != nil {
-			active = true
-			break
-		}
-	}
-	d.mu.Unlock()
-	if active || d.sshService == nil {
-		return
-	}
-	if err := d.sshService.Stop(); err != nil {
-		log.Printf("SSH service stop failed: %v", err)
-	}
 }
 
 // applyRemoteInput initializes the compositor backend on demand. A daemon can
@@ -452,6 +425,24 @@ func (d *Daemon) setInputAuto(req models.Request, enc *json.Encoder, enabled boo
 			d.inputOwner = req.PeerDeviceID
 			d.inputEnabled[req.PeerDeviceID] = true
 		}
+	}
+	_ = enc.Encode(models.Response{})
+}
+
+// setSSHAllowed remembers (or forgets) that a paired phone may open an SSH
+// tunnel. Unlike input-auto, this never retroactively grants access to an
+// already-open tunnel - each tunnel is authorized fresh when it opens.
+func (d *Daemon) setSSHAllowed(req models.Request, enc *json.Encoder, enabled bool) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	if err := d.store.SetSSHAllowed(req.PeerDeviceID, enabled); err != nil {
+		_ = enc.Encode(models.Response{Error: err.Error()})
+		return
+	}
+	if err := d.store.Save(); err != nil {
+		_ = enc.Encode(models.Response{Error: err.Error()})
+		return
 	}
 	_ = enc.Encode(models.Response{})
 }
