@@ -49,6 +49,7 @@ type DeviceSettings struct {
 	InputEnabled     bool   `json:"input_enabled"`
 	InputAuto        bool   `json:"input_auto"`   // switch input on whenever the phone connects
 	AutoConnect      bool   `json:"auto_connect"` // connect on startup and whenever the phone appears
+	SSHAllowed       bool   `json:"ssh_allowed"`  // may open an SSH tunnel; defaults to false
 }
 
 type ManagedSession struct {

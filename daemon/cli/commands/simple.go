@@ -68,4 +68,12 @@ off    don't; an existing connection is left alone`,
 			"on":  {"autoconnect-on", "Auto-connect on for %s"},
 			"off": {"autoconnect-off", "Auto-connect off for %s"},
 		})
+
+	Ssh = actionCommand("ssh", "Allow or block SSH tunnel access from a device.",
+		`enable      allow this device to open an SSH terminal tunnel
+disable     block it (the default for newly paired devices)`,
+		map[string]peerAction{
+			"enable":  {"ssh-enable", "SSH tunnel access enabled for %s"},
+			"disable": {"ssh-disable", "SSH tunnel access disabled for %s"},
+		})
 )

@@ -18,6 +18,7 @@ func init() {
 		commands.Clipboard,
 		commands.Notification,
 		commands.Input,
+		commands.Ssh,
 		commands.Media,
 		commands.Audio,
 		commands.Status,
