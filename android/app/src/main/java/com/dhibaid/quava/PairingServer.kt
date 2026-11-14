@@ -95,6 +95,9 @@ class PairingServer(
     private var activePairing: PairingProtocol.Session? = null
     private var activeSocket: Socket? = null
     private var activeSession: PairingProtocol.RuntimeSession? = null
+    private var sshTunnelId: ByteArray? = null
+    private var sshDataListener: ((ByteArray) -> Unit)? = null
+    private var sshClosedListener: ((String) -> Unit)? = null
     private val lock = Any()
     private val remoteInputDispatcher = RemoteInputDispatcher(scope, protocol) {
         synchronized(lock) { activeSession }
@@ -281,15 +284,37 @@ class PairingServer(
                 onMediaAck = ::handleMediaAck,
                 onMediaState = ::updateMediaState,
                 onUnpair = { forgetHost("The computer unpaired this phone") },
+                onSshData = { message ->
+                    val tunnelId = synchronized(lock) { sshTunnelId }
+                    if (tunnelId != null && message.transactionId.contentEquals(tunnelId)) {
+                        val chunk = message.payload[0] as? ByteArray
+                        if (chunk != null) synchronized(lock) { sshDataListener }?.invoke(chunk)
+                    }
+                },
+                onSshClosed = { message ->
+                    val tunnelId = synchronized(lock) { sshTunnelId }
+                    if (tunnelId != null && message.transactionId.contentEquals(tunnelId)) {
+                        val reason = message.payload[0] as? String ?: ""
+                        val listener = synchronized(lock) {
+                            sshTunnelId = null
+                            sshClosedListener
+                        }
+                        listener?.invoke(reason)
+                    }
+                },
             )
         } finally {
             // A replacement connection may already be active when an older
             // session finishes. Do not let the old cleanup erase it.
             statusJob?.cancel()
             callStateWatcher.stop()
-            synchronized(lock) {
+            val closedListener = synchronized(lock) {
                 if (activeSession === session) activeSession = null
+                val listener = if (sshTunnelId != null) sshClosedListener else null
+                sshTunnelId = null
+                listener
             }
+            closedListener?.invoke("session ended")
         }
 
     }
@@ -363,6 +388,65 @@ class PairingServer(
 
     fun sendRemoteInput(input: RemoteInput) {
         remoteInputDispatcher.send(input)
+    }
+
+    /**
+     * Opens an SSH tunnel over the authenticated session and waits for the
+     * daemon's grant or denial. On success, returns the daemon's SSH host
+     * key fingerprint to pin instead of trusting it blindly.
+     */
+    suspend fun openSshTunnel(clientPublicKeyBlob: ByteArray): Result<ByteArray> {
+        val session = synchronized(lock) { activeSession }
+            ?: return Result.failure(IllegalStateException("not connected to a host"))
+        return try {
+            val ack = protocol.openSshTunnel(session, clientPublicKeyBlob)
+            val granted = ack.payload[0] as? Boolean ?: false
+            if (!granted) {
+                val reason = ack.payload[1] as? String ?: "ssh access was denied"
+                Result.failure(IllegalStateException(reason))
+            } else {
+                val fingerprint = ack.payload[2] as? ByteArray ?: ByteArray(0)
+                synchronized(lock) { sshTunnelId = ack.transactionId }
+                Result.success(fingerprint)
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    /** Sends one chunk of SSH protocol bytes for the currently open tunnel, if any. */
+    fun sendSshData(chunk: ByteArray) {
+        val session = synchronized(lock) { activeSession } ?: return
+        val tunnelId = synchronized(lock) { sshTunnelId } ?: return
+        try {
+            protocol.sendSshData(session, tunnelId, chunk)
+        } catch (e: Exception) {
+            Log.e(TAG, "failed to send ssh data", e)
+        }
+    }
+
+    /** Ends the current SSH tunnel, telling the daemon so it can tear its side down too. */
+    fun closeSshTunnel(reason: String = "") {
+        val (session, tunnelId) = synchronized(lock) {
+            val result = activeSession to sshTunnelId
+            sshTunnelId = null
+            result
+        }
+        if (session != null && tunnelId != null) {
+            try {
+                protocol.sendSshClose(session, tunnelId, reason)
+            } catch (e: Exception) {
+                Log.w(TAG, "failed to send ssh close", e)
+            }
+        }
+    }
+
+    /** Installs the SSH terminal's callbacks for inbound data and tunnel closure. */
+    fun setSshListeners(onData: ((ByteArray) -> Unit)?, onClosed: ((String) -> Unit)?) {
+        synchronized(lock) {
+            sshDataListener = onData
+            sshClosedListener = onClosed
+        }
     }
 
     fun sendMediaControl(control: MediaControl) {

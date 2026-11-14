@@ -62,7 +62,8 @@ static void register_desktop_entry(void) {
 		"Name=Quava\n"
 		"Comment=Connect your Android phone to this computer\n"
 		"Exec=%s\n"
-		"Icon=" APP_ID "\n"
+		"Icon=" APP_ID
+		"\n"
 		"Terminal=false\n"
 		"Categories=Utility;Network;\n"
 		"StartupWMClass=" APP_ID "\n",
