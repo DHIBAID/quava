@@ -1,236 +1,49 @@
 package ssh
 
 import (
-	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/pem"
 	"errors"
 	"fmt"
 	"log"
-	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"sync"
 	"time"
 
 	"golang.org/x/crypto/ssh"
 )
 
-const sshListenAddr = ":2222"
-
 const sshHandshakeTimeout = 10 * time.Second
 
-var ErrAlreadyRunning = errors.New("ssh service is already running")
-
-// SSHService manages the SSH server listener and configuration.
-type SSHService struct {
-	mu         sync.Mutex
-	listenAddr string
-	config     *ssh.ServerConfig
-	listener   net.Listener
-	conns      map[net.Conn]struct{}
-	allowed    map[string]string
+// Service mints hardened, single-use SSH server configurations. It never
+// listens on a socket: every tunnel is opened explicitly by the session
+// layer in response to an authenticated peer request. The only state it
+// carries across tunnels is the daemon's own persistent host identity.
+type Service struct {
+	hostKey ssh.Signer
 }
 
-// NewSSHService creates a new SSH service.
-func NewSSHService(listenAddr string, config *ssh.ServerConfig) *SSHService {
-	if listenAddr == "" {
-		listenAddr = sshListenAddr
-	}
-	return &SSHService{
-		listenAddr: listenAddr,
-		config:     config,
-		conns:      make(map[net.Conn]struct{}),
-		allowed:    make(map[string]string),
-	}
-}
-
-// SetAllowedAddress associates a Quava peer with the address it used for the
-// authenticated transport. SSH accepts connections only from these addresses.
-func (s *SSHService) SetAllowedAddress(peerID string, address net.Addr) {
-	host := addressHost(address)
-	if host == "" {
-		s.RemoveAllowedAddress(peerID)
-		return
-	}
-
-	s.mu.Lock()
-	s.allowed[peerID] = host
-	s.mu.Unlock()
-}
-
-// RemoveAllowedAddress removes a peer from the SSH source allowlist.
-func (s *SSHService) RemoveAllowedAddress(peerID string) {
-	s.mu.Lock()
-	delete(s.allowed, peerID)
-	s.mu.Unlock()
-}
-
-// NewSSHServiceWithKey creates an SSH service using a persistent host key.
-func NewSSHServiceWithKey(listenAddr, keyPath string) (*SSHService, error) {
+// NewService loads or generates the daemon's persistent SSH host key.
+func NewService(keyPath string) (*Service, error) {
 	signer, err := loadOrGenerateKey(keyPath)
 	if err != nil {
 		return nil, fmt.Errorf("ssh: load host key: %w", err)
 	}
-
-	config := &ssh.ServerConfig{NoClientAuth: true}
-	config.AddHostKey(signer)
-	return NewSSHService(listenAddr, config), nil
+	return &Service{hostKey: signer}, nil
 }
 
-// Start starts the SSH server and returns once its listener is ready.
-func (s *SSHService) Start(ctx context.Context) error {
-	if err := ctx.Err(); err != nil {
-		return fmt.Errorf("ssh: start canceled: %w", err)
-	}
-	if s.config == nil {
-		return errors.New("ssh service has no server configuration")
-	}
-
-	s.mu.Lock()
-	if s.listener != nil {
-		s.mu.Unlock()
-		return ErrAlreadyRunning
-	}
-
-	listener, err := net.Listen("tcp", s.listenAddr)
-	if err != nil {
-		s.mu.Unlock()
-		return fmt.Errorf("ssh: listen: %w", err)
-	}
-	s.listener = listener
-	s.mu.Unlock()
-
-	log.Printf("SSH server listening on %s", listener.Addr())
-	go func() {
-		<-ctx.Done()
-		_ = s.Stop()
-	}()
-	go s.acceptConnections(listener)
-	return nil
+// HostKeyFingerprint returns the SHA-256 digest of the host's public key
+// blob, so a peer can pin it instead of trusting it on first use.
+func (s *Service) HostKeyFingerprint() [32]byte {
+	return sha256.Sum256(s.hostKey.PublicKey().Marshal())
 }
 
-func (s *SSHService) acceptConnections(listener net.Listener) {
-	for {
-		conn, err := listener.Accept()
-		if err != nil {
-			s.mu.Lock()
-			stopped := s.listener != listener
-			if !stopped {
-				s.listener = nil
-				clear(s.allowed)
-			}
-			s.mu.Unlock()
-			if stopped {
-				return
-			}
-			log.Printf("ssh accept failed: %v", err)
-			return
-		}
-
-		s.mu.Lock()
-		s.conns[conn] = struct{}{}
-		s.mu.Unlock()
-		go s.handleConnection(conn)
-	}
-}
-
-// Stop closes the listener and all active SSH connections.
-func (s *SSHService) Stop() error {
-	s.mu.Lock()
-	listener := s.listener
-	s.listener = nil
-	for conn := range s.conns {
-		_ = conn.Close()
-	}
-	s.conns = make(map[net.Conn]struct{})
-	s.mu.Unlock()
-
-	if listener == nil {
-		return nil
-	}
-	if err := listener.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
-		return fmt.Errorf("ssh: stop: %w", err)
-	}
-	log.Printf("SSH server stopped")
-	return nil
-}
-
-// handleConnection creates and manages an SSH session for each connection.
-func (s *SSHService) handleConnection(conn net.Conn) {
-	defer func() {
-		_ = conn.Close()
-		s.mu.Lock()
-		delete(s.conns, conn)
-		s.mu.Unlock()
-	}()
-
-	if !s.isAllowed(conn.RemoteAddr()) {
-		log.Printf("ssh connection rejected from unauthorized address %s", conn.RemoteAddr())
-		return
-	}
-
-	_ = conn.SetDeadline(time.Now().Add(sshHandshakeTimeout))
-
-	sshConn, chans, reqs, err := ssh.NewServerConn(conn, s.config)
-	if err != nil {
-		log.Printf("ssh handshake failed from %s: %v", conn.RemoteAddr(), err)
-		return
-	}
-	defer func() { _ = sshConn.Close() }()
-	_ = conn.SetDeadline(time.Time{})
-
-	log.Printf(
-		"ssh connection established from %s (user: %s)",
-		sshConn.RemoteAddr(),
-		sshConn.User(),
-	)
-
-	go ssh.DiscardRequests(reqs)
-
-	for newChannel := range chans {
-		go s.handleChannel(newChannel)
-	}
-
-	log.Printf("ssh connection closed: %s", sshConn.RemoteAddr())
-}
-
-// isAllowed reports whether the peer address belongs to an authenticated
-// Quava session.
-func (s *SSHService) isAllowed(address net.Addr) bool {
-	host := addressHost(address)
-	if host == "" {
-		return false
-	}
-	if ip := net.ParseIP(host); ip != nil && ip.IsLoopback() {
-		return true
-	}
-
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	for _, allowedHost := range s.allowed {
-		if allowedHost == host {
-			return true
-		}
-	}
-	return false
-}
-
-func addressHost(address net.Addr) string {
-	if address == nil {
-		return ""
-	}
-	host, _, err := net.SplitHostPort(address.String())
-	if err == nil {
-		return host
-	}
-	return address.String()
-}
-
-// handleChannel handles incoming SSH channels.
-func (s *SSHService) handleChannel(newChannel ssh.NewChannel) {
+// handleChannel accepts the one "session" channel a tunnel is allowed to
+// carry and rejects anything else.
+func handleChannel(newChannel ssh.NewChannel) {
 	if newChannel.ChannelType() != "session" {
 		_ = newChannel.Reject(
 			ssh.UnknownChannelType,
@@ -245,13 +58,11 @@ func (s *SSHService) handleChannel(newChannel ssh.NewChannel) {
 		return
 	}
 
-	go s.handleSession(channel, requests)
+	handleSession(channel, requests)
 }
 
-func (s *SSHService) handleSession(
-	channel ssh.Channel,
-	requests <-chan *ssh.Request,
-) {
+// handleSession handles incoming SSH channel requests.
+func handleSession(channel ssh.Channel, requests <-chan *ssh.Request) {
 	defer func() { _ = channel.Close() }()
 
 	var requestedPTY *ptyRequest
@@ -275,9 +86,9 @@ func (s *SSHService) handleSession(
 			_ = req.Reply(true, nil)
 
 			if requestedPTY != nil {
-				s.runPTYShell(channel, requests, *requestedPTY)
+				runPTYShell(channel, requests, *requestedPTY)
 			} else {
-				s.runShell(channel)
+				runShell(channel)
 			}
 			return
 
@@ -292,7 +103,7 @@ func (s *SSHService) handleSession(
 			}
 
 			_ = req.Reply(true, nil)
-			s.runCommand(channel, payload.Command)
+			runCommand(channel, payload.Command)
 			return
 
 		default:
@@ -302,7 +113,7 @@ func (s *SSHService) handleSession(
 }
 
 // runShell starts an interactive login shell.
-func (s *SSHService) runShell(channel ssh.Channel) {
+func runShell(channel ssh.Channel) {
 	shell := os.Getenv("SHELL")
 	if shell == "" {
 		shell = "/bin/bash"
@@ -328,7 +139,7 @@ func (s *SSHService) runShell(channel ssh.Channel) {
 }
 
 // runCommand executes a command through the user's shell.
-func (s *SSHService) runCommand(channel ssh.Channel, command string) {
+func runCommand(channel ssh.Channel, command string) {
 	shell := os.Getenv("SHELL")
 	if shell == "" {
 		shell = "/bin/bash"
@@ -345,8 +156,7 @@ func (s *SSHService) runCommand(channel ssh.Channel, command string) {
 	}
 	exitCode := 0
 	if err != nil {
-		var exitError *exec.ExitError
-		if errors.As(err, &exitError) {
+		if exitError, ok := errors.AsType[*exec.ExitError](err); ok {
 			exitCode = exitError.ExitCode()
 		} else {
 			exitCode = 1

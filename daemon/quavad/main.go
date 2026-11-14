@@ -47,7 +47,7 @@ type Daemon struct {
 	connMu               sync.Mutex
 	connections          map[net.Conn]struct{}
 	watcher              *discovery.Watcher
-	sshService           *quavassh.SSHService
+	sshService           *quavassh.Service
 	audioAutoMuted       bool // true while a phone call put the host's audio into a mute WE applied
 	audioWasMutedBefore  bool // the host's own mute state right before we auto-muted it
 }
@@ -118,7 +118,7 @@ func main() {
 		inputEnabled: map[string]bool{},
 		connections:  map[net.Conn]struct{}{},
 	}
-	if service, err := quavassh.NewSSHServiceWithKey(":2222", filepath.Join(store.Dir(), "ssh_host_key")); err != nil {
+	if service, err := quavassh.NewService(filepath.Join(store.Dir(), "ssh_host_key")); err != nil {
 		log.Printf("SSH service unavailable: %v", err)
 	} else {
 		d.sshService = service

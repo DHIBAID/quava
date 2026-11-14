@@ -101,7 +101,7 @@ private val TerminalBackground = WarmDarkContainerLowest
 fun SshTerminalScreen(server: PairingServer, scope: CoroutineScope, onBack: () -> Unit) {
     val state by server.state.collectAsStateWithLifecycle()
     val context = androidx.compose.ui.platform.LocalContext.current
-    val terminal = remember { SshTerminal(context, scope) }
+    val terminal = remember { SshTerminal(context, scope, server) }
     val snapshot by terminal.screen.collectAsStateWithLifecycle()
     val scrollState = rememberScrollState()
     val toolbarScrollState = rememberScrollState()
@@ -137,8 +137,8 @@ fun SshTerminalScreen(server: PairingServer, scope: CoroutineScope, onBack: () -
         }
     }
 
-    DisposableEffect(state.hostAddress) {
-        state.hostAddress?.let(terminal::connect)
+    DisposableEffect(state.connected) {
+        if (state.connected) terminal.connect()
         onDispose { terminal.close() }
     }
     // "Was the user at the bottom" has to be judged against the scroll range

@@ -15,7 +15,6 @@ QuavaIpcReply* quava_ipc_read_reply(GInputStream* input);
 const gchar* quava_ipc_error(const QuavaIpcReply* reply);
 void quava_ipc_reply_free(QuavaIpcReply* reply);
 
-
 /* ---- Generic requests -------------------------------------------------
  * Build a request with quava_req_new() and the quava_req_* setters, then
  * send it with quava_ipc_send(). The callback runs on the GTK main thread
