@@ -7,6 +7,8 @@ import com.upokecenter.cbor.CBORObject
 import com.upokecenter.cbor.CBORType
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
+import java.util.concurrent.ConcurrentHashMap
 import org.bouncycastle.jce.provider.BouncyCastleProvider
 import java.io.DataInputStream
 import java.io.DataOutputStream
@@ -373,6 +375,45 @@ class PairingProtocol(private val appContext: Context) {
         )
     }
 
+    // No existing Android call waits for a correlated reply - every other
+    // send here is fire-and-forget, with the matching _ACK case in
+    // runSession just logging. Opening a tunnel needs a real request/
+    // response round trip, so this keeps one CompletableDeferred per
+    // in-flight transaction, registered before the write goes out (the same
+    // register-before-write ordering the daemon's sendRequest uses) and
+    // completed from runSession's SSH_OPEN_ACK case below.
+    private val pendingSshOpenAcks = ConcurrentHashMap<String, CompletableDeferred<Message>>()
+
+    private fun transactionKey(transactionId: ByteArray) = Base64.encodeToString(transactionId, Base64.NO_WRAP)
+
+    /**
+     * Opens an SSH tunnel over this already-authenticated session and waits
+     * for the daemon to grant or deny it. clientPublicKeyBlob is an
+     * ephemeral, never-persisted key generated fresh for this one attempt;
+     * its only purpose is to let the daemon mint a single-use SSH
+     * credential good for exactly this tunnel.
+     */
+    internal suspend fun openSshTunnel(session: RuntimeSession, clientPublicKeyBlob: ByteArray): Message {
+        val transactionId = randomBytes(TRANSACTION_ID_BYTES)
+        val key = transactionKey(transactionId)
+        val deferred = CompletableDeferred<Message>()
+        pendingSshOpenAcks[key] = deferred
+        try {
+            writeMessage(session.output, Message(SSH_OPEN, transactionId, mapOf(0 to clientPublicKeyBlob)))
+            return withTimeout(SSH_OPEN_TIMEOUT_MS) { deferred.await() }
+        } finally {
+            pendingSshOpenAcks.remove(key)
+        }
+    }
+
+    internal fun sendSshData(session: RuntimeSession, tunnelId: ByteArray, chunk: ByteArray) {
+        writeMessage(session.output, Message(SSH_DATA, tunnelId, mapOf(0 to chunk)))
+    }
+
+    internal fun sendSshClose(session: RuntimeSession, tunnelId: ByteArray, reason: String) {
+        writeMessage(session.output, Message(SSH_CLOSE, tunnelId, mapOf(0 to reason)))
+    }
+
     internal fun sendMediaControl(session: RuntimeSession, control: MediaControl) {
         writeMessage(
             session.output,
@@ -402,6 +443,8 @@ class PairingProtocol(private val appContext: Context) {
         onMediaState: (Message) -> Unit,
         onMediaAck: (Message) -> Unit,
         onUnpair: () -> Unit,
+        onSshData: (Message) -> Unit,
+        onSshClosed: (Message) -> Unit,
     ) {
         while (!session.socket.isClosed) {
             Log.d("Quava", "Waiting for session message...")
@@ -557,6 +600,18 @@ class PairingProtocol(private val appContext: Context) {
                         Message(DISMISS_ANDROID_NOTIFICATION_ACK, message.transactionId, emptyMap())
                     )
                 }
+
+                SSH_OPEN_ACK -> {
+                    val key = transactionKey(message.transactionId)
+                    val waiting = pendingSshOpenAcks.remove(key)
+                    if (waiting == null || !waiting.complete(message)) {
+                        Log.w("Quava", "SSH_OPEN_ACK for an unknown or already-resolved transaction")
+                    }
+                }
+
+                SSH_DATA -> onSshData(message)
+
+                SSH_CLOSE -> onSshClosed(message)
 
                 else -> {
                     error("unexpected session message ${message.type}")
@@ -770,14 +825,14 @@ class PairingProtocol(private val appContext: Context) {
         responderEphemeral: ByteArray
     ): ByteArray =
         "quava-pairing".encodeToByteArray() + byteArrayOf(
-            0,
-            0,
-            0,
-            0,
-            0,
-            0,
-            0,
-            1
+            (PROTOCOL_VERSION ushr 56).toByte(),
+            (PROTOCOL_VERSION ushr 48).toByte(),
+            (PROTOCOL_VERSION ushr 40).toByte(),
+            (PROTOCOL_VERSION ushr 32).toByte(),
+            (PROTOCOL_VERSION ushr 24).toByte(),
+            (PROTOCOL_VERSION ushr 16).toByte(),
+            (PROTOCOL_VERSION ushr 8).toByte(),
+            PROTOCOL_VERSION.toByte()
         ) + transactionId + initiatorDeviceId + responderDeviceId + initiatorPublic + responderPublic +
             initiatorNonce + responderNonce + initiatorEphemeral + responderEphemeral
 
@@ -863,6 +918,11 @@ class PairingProtocol(private val appContext: Context) {
         private const val CALL_STATE = 0x36L
         private const val CALL_STATE_ACK = 0x37L
         private const val UNPAIR_ACK = 0x34L
+        private const val SSH_OPEN = 0x38L
+        private const val SSH_OPEN_ACK = 0x39L
+        private const val SSH_DATA = 0x3aL
+        private const val SSH_CLOSE = 0x3bL
+        private const val SSH_OPEN_TIMEOUT_MS = 10_000L
         private const val MULTIMEDIA = 0x30L
         private const val MULTIMEDIA_ACK = 0x31L
         private const val MULTIMEDIA_STATE = 0x32L
