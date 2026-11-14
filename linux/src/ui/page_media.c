@@ -1,11 +1,9 @@
-#include <string.h>
-
 #include "../includes/app.h"
 
 typedef struct {
 	App* app;
 	GtkWidget* root;
-	GtkWidget* body;          /* GtkStack: "player" / "empty" */
+	GtkWidget* body;		  /* GtkStack: "player" / "empty" */
 	GtkWidget* player_button; /* GtkMenuButton */
 	GtkWidget* player_label;
 	GtkWidget* player_menu;
@@ -378,8 +376,7 @@ static void on_list(QuavaIpcReply* reply, gpointer data) {
 
 		gboolean active = json_object_has_member(player, "is_active") && json_object_get_boolean_member(player, "is_active");
 		gtk_box_append(GTK_BOX(page->player_menu),
-					   menu_item(q_json_string(player, "identity", "Player"), q_json_string(player, "playback_status", NULL),
-								 q_json_string(player, "bus_name", NULL), active));
+					   menu_item(q_json_string(player, "identity", "Player"), q_json_string(player, "playback_status", NULL), q_json_string(player, "bus_name", NULL), active));
 	}
 }
 

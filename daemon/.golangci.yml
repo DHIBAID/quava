@@ -4,18 +4,18 @@
 version: "2"
 
 linters:
-  default: standard
-  enable:
-    - errname      # sentinel errors are named ErrX, error types XError
-    - errorlint    # errors.Is/As and %w instead of == and type assertions
-    - gocritic
-    - misspell
-    - nilerr       # returning nil right after an error check needs a //nolint:nilerr and a reason
-    - perfsprint   # errors.New / hex.EncodeToString instead of fmt for constants
-    - predeclared  # no variables named copy, clear, new, ...
-    - prealloc
-    - unconvert
-    - unparam
-    - usestdlibvars
-    - wastedassign
-    - whitespace
+    default: standard
+    enable:
+        - errname # sentinel errors are named ErrX, error types XError
+        - errorlint # errors.Is/As and %w instead of == and type assertions
+        - gocritic
+        - misspell
+        - nilerr # returning nil right after an error check needs a //nolint:nilerr and a reason
+        - perfsprint # errors.New / hex.EncodeToString instead of fmt for constants
+        - predeclared # no variables named copy, clear, new, ...
+        - prealloc
+        - unconvert
+        - unparam
+        - usestdlibvars
+        - wastedassign
+        - whitespace

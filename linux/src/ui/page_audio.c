@@ -161,9 +161,7 @@ static void on_devices(QuavaIpcReply* reply, gpointer data) {
 			g_free(page->snapshot);
 			page->snapshot = g_strdup("none");
 			q_clear_box(page->list);
-			gtk_box_append(GTK_BOX(page->list),
-						   q_empty_state(Q_ICON_SPEAKER, "No audio outputs found",
-										 error != NULL ? error : "Check that PipeWire or PulseAudio is running."));
+			gtk_box_append(GTK_BOX(page->list), q_empty_state(Q_ICON_SPEAKER, "No audio outputs found", error != NULL ? error : "Check that PipeWire or PulseAudio is running."));
 		}
 		return;
 	}

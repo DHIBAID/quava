@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"os"
@@ -54,6 +55,12 @@ type Session struct {
 	eventQueue          chan inputJob
 	inputTokens         float64
 	inputLast           time.Time
+
+	sshMu          sync.Mutex
+	sshQueue       chan inputJob
+	sshTunnel      io.ReadWriteCloser
+	sshTunnelID    []byte
+	sshOpenHandler func(context.Context, SSHOpenRequest) (io.ReadWriteCloser, [32]byte, error)
 }
 
 // RemoteAddr returns the network address of the authenticated peer.
@@ -323,8 +330,10 @@ func (s *Session) startDispatcher(ctx context.Context) {
 		s.readDone = make(chan error, 1)
 		s.inputQueue = make(chan inputJob, 128)
 		s.eventQueue = make(chan inputJob, 64)
+		s.sshQueue = make(chan inputJob, 256)
 		go s.runInputWorker(ctx)
 		go s.runEventWorker(ctx)
+		go s.runSSHWorker(ctx)
 		go func() {
 			for {
 				msg, err := s.conn.ReadMessage(ctx)
@@ -343,6 +352,15 @@ func (s *Session) dispatchIncoming(ctx context.Context, msg protocol.Message) {
 		return
 	}
 	job := inputJob{ctx: ctx, msg: msg}
+	switch msg.Type {
+	case protocol.MessageTypeSSHOpen, protocol.MessageTypeSSHData, protocol.MessageTypeSSHClose:
+		// Unlike eventQueue, this send is deliberately blocking with no
+		// drop fallback: dropping a clipboard/notification message is
+		// harmless, but dropping one SSHData chunk would desync the SSH
+		// protocol riding inside it and corrupt the stream.
+		s.sshQueue <- job
+		return
+	}
 	if msg.Type == protocol.MessageTypeInputEvent {
 		if !s.allowInputEvent(time.Now()) {
 			_ = s.ackInput(ctx, msg, false)
@@ -592,6 +610,12 @@ func (s *Session) Close() error {
 	if s == nil || s.conn == nil {
 		return nil
 	}
+	s.sshMu.Lock()
+	if s.sshTunnel != nil {
+		_ = s.sshTunnel.Close()
+		s.sshTunnel = nil
+	}
+	s.sshMu.Unlock()
 	return s.conn.Close()
 }
 

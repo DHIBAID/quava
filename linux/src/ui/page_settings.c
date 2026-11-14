@@ -67,8 +67,7 @@ static void autoconnect_switched(GObject* widget, GParamSpec* pspec, gpointer da
 
 	gboolean active = gtk_switch_get_active(GTK_SWITCH(widget));
 
-	devices_action(active ? "autoconnect-on" : "autoconnect-off", card_id(widget),
-				   active ? "Will connect automatically" : "Won't connect automatically");
+	devices_action(active ? "autoconnect-on" : "autoconnect-off", card_id(widget), active ? "Will connect automatically" : "Won't connect automatically");
 }
 
 static void sync_selected(GObject* widget, GParamSpec* pspec, gpointer data) {
@@ -86,8 +85,7 @@ static void clipboard_switched(GObject* widget, GParamSpec* pspec, gpointer data
 
 	gboolean active = gtk_switch_get_active(GTK_SWITCH(widget));
 
-	devices_action(active ? "clipboard-sync-on" : "clipboard-sync-off", card_id(widget),
-				   active ? "Clipboard sync is on" : "Clipboard sync is off");
+	devices_action(active ? "clipboard-sync-on" : "clipboard-sync-off", card_id(widget), active ? "Clipboard sync is on" : "Clipboard sync is off");
 }
 
 static void push_clicked(GtkButton* button, gpointer data) {
@@ -101,8 +99,7 @@ static void input_switched(GObject* widget, GParamSpec* pspec, gpointer data) {
 
 	gboolean active = gtk_switch_get_active(GTK_SWITCH(widget));
 
-	devices_action(active ? "input-enable" : "input-disable", card_id(widget),
-				   active ? "Your phone can control this computer" : "Remote input is off");
+	devices_action(active ? "input-enable" : "input-disable", card_id(widget), active ? "Your phone can control this computer" : "Remote input is off");
 }
 
 static void input_auto_switched(GObject* widget, GParamSpec* pspec, gpointer data) {
@@ -111,8 +108,7 @@ static void input_auto_switched(GObject* widget, GParamSpec* pspec, gpointer dat
 
 	gboolean active = gtk_switch_get_active(GTK_SWITCH(widget));
 
-	devices_action(active ? "input-auto-on" : "input-auto-off", card_id(widget),
-				   active ? "Remote input will turn on whenever this phone connects" : "Remote input will need turning on each time");
+	devices_action(active ? "input-auto-on" : "input-auto-off", card_id(widget), active ? "Remote input will turn on whenever this phone connects" : "Remote input will need turning on each time");
 }
 
 static void ping_clicked(GtkButton* button, gpointer data) {
@@ -201,8 +197,7 @@ static GtkWidget* device_settings_card(JsonObject* device, JsonObject* settings,
 	gtk_box_append(GTK_BOX(card), divider());
 	gtk_box_append(GTK_BOX(card), section_label("CONNECTION"));
 	gtk_box_append(GTK_BOX(card),
-				   setting_row("Connect automatically", "Reconnect whenever this phone is nearby",
-							   switch_for(id, setting_flag(settings, "auto_connect", TRUE), G_CALLBACK(autoconnect_switched))));
+				   setting_row("Connect automatically", "Reconnect whenever this phone is nearby", switch_for(id, setting_flag(settings, "auto_connect", TRUE), G_CALLBACK(autoconnect_switched))));
 
 	/* Sync */
 	gtk_box_append(GTK_BOX(card), divider());
@@ -233,11 +228,9 @@ static GtkWidget* device_settings_card(JsonObject* device, JsonObject* settings,
 	gtk_box_append(GTK_BOX(card), divider());
 	gtk_box_append(GTK_BOX(card), section_label("REMOTE INPUT"));
 	gtk_box_append(GTK_BOX(card),
-				   setting_row("Remote input", "Let this phone act as a touchpad and keyboard",
-							   switch_for(id, setting_flag(settings, "input_enabled", FALSE), G_CALLBACK(input_switched))));
+				   setting_row("Remote input", "Let this phone act as a touchpad and keyboard", switch_for(id, setting_flag(settings, "input_enabled", FALSE), G_CALLBACK(input_switched))));
 	gtk_box_append(GTK_BOX(card),
-				   setting_row("Always allow remote input", "Turn it on automatically whenever this phone connects",
-							   switch_for(id, setting_flag(settings, "input_auto", FALSE), G_CALLBACK(input_auto_switched))));
+				   setting_row("Always allow remote input", "Turn it on automatically whenever this phone connects", switch_for(id, setting_flag(settings, "input_auto", FALSE), G_CALLBACK(input_auto_switched))));
 
 	/* Find my phone */
 	gtk_box_append(GTK_BOX(card), divider());
@@ -306,8 +299,7 @@ static void on_devices(JsonObject* reply) {
 
 	if (devices == NULL || json_array_get_length(devices) == 0) {
 		gtk_box_append(GTK_BOX(page->list),
-					   q_empty_state(Q_ICON_GEAR, "No paired devices",
-									 reply == NULL ? "The Quava daemon isn't running." : "Pair a phone from the Devices page first."));
+					   q_empty_state(Q_ICON_GEAR, "No paired devices", reply == NULL ? "The Quava daemon isn't running." : "Pair a phone from the Devices page first."));
 		return;
 	}
 
