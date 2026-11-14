@@ -100,7 +100,7 @@ func (s *Session) denySSHOpen(ctx context.Context, transactionID []byte, reason 
 		0: false,
 		1: reason,
 	})
-	
+
 	s.pingMutex.Lock()
 	err := s.conn.WriteMessage(ctx, ack)
 	s.pingMutex.Unlock()
@@ -126,7 +126,7 @@ func (s *Session) handleSSHData(ctx context.Context, msg protocol.Message) error
 		s.closeSSHTunnel(ctx, msg.TransactionID, "")
 		return err
 	}
-	
+
 	return nil
 }
 
@@ -142,7 +142,7 @@ func (s *Session) handleSSHClose(_ context.Context, msg protocol.Message) {
 		s.sshTunnel = nil
 		s.sshTunnelID = nil
 	}
-	
+
 	s.sshMu.Unlock()
 	if matches {
 		_ = tunnel.Close()
@@ -164,7 +164,7 @@ func (s *Session) closeSSHTunnel(ctx context.Context, tunnelID []byte, reason st
 		s.sshTunnel = nil
 		s.sshTunnelID = nil
 	}
-	
+
 	s.sshMu.Unlock()
 	if !matches {
 		return
@@ -197,7 +197,7 @@ func (s *Session) runSSHOutbound(ctx context.Context, tunnel io.ReadWriteCloser,
 			if !errors.Is(err, io.EOF) {
 				reason = err.Error()
 			}
-			
+
 			s.closeSSHTunnel(ctx, tunnelID, reason)
 			return
 		}
