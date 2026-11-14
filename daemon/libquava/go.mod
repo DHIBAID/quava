@@ -8,7 +8,7 @@ require (
 	github.com/godbus/dbus/v5 v5.2.4
 	golang.design/x/clipboard v0.11.0
 	golang.org/x/crypto v0.59.0
-	golang.org/x/image v0.47.0
+	golang.org/x/image v0.48.0
 	gopkg.in/yaml.v3 v3.0.1
 )
 
