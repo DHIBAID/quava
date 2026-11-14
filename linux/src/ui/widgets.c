@@ -1,5 +1,3 @@
-#include <string.h>
-
 #include "../includes/app.h"
 
 GtkWidget* q_label(const gchar* text, const gchar* css_class) {
