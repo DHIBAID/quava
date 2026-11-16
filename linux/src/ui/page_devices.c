@@ -182,12 +182,13 @@ static GtkWidget* status_strip(JsonObject* status) {
 	GtkWidget* flow = gtk_flow_box_new();
 
 	gtk_flow_box_set_selection_mode(GTK_FLOW_BOX(flow), GTK_SELECTION_NONE);
-	/* Homogeneous, not FALSE: on GTK 4.14 (the AppImage's bundled runtime), a
-	 * non-homogeneous GtkFlowBox with unevenly-sized children never wraps to
-	 * more than one child per line regardless of available width, pushing
-	 * the strip's height well past the card. GTK 4.20 renders either way
-	 * fine, so homogeneous is the version that actually works everywhere. */
-	gtk_flow_box_set_homogeneous(GTK_FLOW_BOX(flow), TRUE);
+	/* Non-homogeneous so each pill is only as wide as its own content ("65%"
+	 * shouldn't be as wide as "Wi-Fi · Excellent"). On GTK 4.14 (the
+	 * AppImage's bundled runtime) a non-homogeneous GtkFlowBox can under-report
+	 * its own wrapped height, so the card this sits in clips its content
+	 * (see device_card's GTK_OVERFLOW_HIDDEN) instead of letting a misjudged
+	 * row spill out past the card and over whatever is below it. */
+	gtk_flow_box_set_homogeneous(GTK_FLOW_BOX(flow), FALSE);
 	gtk_flow_box_set_column_spacing(GTK_FLOW_BOX(flow), 8);
 	gtk_flow_box_set_row_spacing(GTK_FLOW_BOX(flow), 8);
 	gtk_flow_box_set_max_children_per_line(GTK_FLOW_BOX(flow), 6);
@@ -198,7 +199,7 @@ static GtkWidget* status_strip(JsonObject* status) {
 
 	gboolean bluetooth = q_json_bool(status, "bluetooth");
 	gtk_flow_box_append(GTK_FLOW_BOX(flow),
-						stat_pill(quava_icon_new(Q_ICON_BLUETOOTH, 18), bluetooth ? "Bluetooth on" : "Bluetooth off", bluetooth ? NULL : "muted"));
+						stat_pill(quava_icon_new(Q_ICON_BLUETOOTH, 18), bluetooth ? "On" : "Off", bluetooth ? NULL : "muted"));
 
 	gint64 free_bytes = q_json_int(status, "storage_free", -1);
 	if (free_bytes >= 0 && q_json_int(status, "storage_total", -1) > 0) {
@@ -228,6 +229,10 @@ static GtkWidget* device_card(JsonObject* device, JsonObject* status, gboolean c
 
 	GtkWidget* card = gtk_box_new(GTK_ORIENTATION_VERTICAL, 16);
 	gtk_widget_add_css_class(card, "q-card");
+	/* Keeps the status strip's pills from ever spilling past the card's
+	 * rounded border into whatever sits below it, even if a GtkFlowBox
+	 * mis-measures its wrapped height (see status_strip). */
+	gtk_widget_set_overflow(card, GTK_OVERFLOW_HIDDEN);
 	if (connected)
 		gtk_widget_add_css_class(card, "connected");
 

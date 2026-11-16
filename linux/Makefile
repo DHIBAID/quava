@@ -22,9 +22,9 @@ CFLAGS += -Wstrict-prototypes -Wmissing-prototypes -Wredundant-decls -O2
 CFLAGS += $(shell $(PKG_CONFIG) --cflags gtk4 json-glib-1.0 gio-unix-2.0)
 LDLIBS += $(shell $(PKG_CONFIG) --libs gtk4 json-glib-1.0 gio-unix-2.0) -lm
 
-.PHONY: all build run clean install uninstall
+.PHONY: all build run clean install uninstall compile_commands
 
-all: build
+all: compile_commands build
 
 build: $(BUILD_DIR)/$(TARGET)
 
@@ -54,9 +54,14 @@ install: build
 	install -Dm755 $(BUILD_DIR)/$(TARGET) "$(HOME)/.local/bin/quava-gui"
 	install -Dm644 res/icon.png "$(HOME)/.local/share/icons/hicolor/192x192/apps/io.quava.Desktop.png"
 	install -Dm644 res/io.quava.Desktop.desktop "$(HOME)/.local/share/applications/io.quava.Desktop.desktop"
-	-gtk-update-icon-cache -q -t "$(HOME)/.local/share/icons/hicolor"
-	-update-desktop-database -q "$(HOME)/.local/share/applications"
+	gtk-update-icon-cache -q -t "$(HOME)/.local/share/icons/hicolor"
+	update-desktop-database -q "$(HOME)/.local/share/applications"
 	@echo "Installed Quava. Launch it from your app menu or run quava-gui."
+
+# Generate compile_commands.json for clangd and other tools that use it.
+compile_commands:
+	$(MAKE) clean
+	bear -- $(MAKE) build
 
 uninstall:
 	rm -f "$(HOME)/.local/bin/quava-gui" \

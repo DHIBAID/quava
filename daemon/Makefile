@@ -18,6 +18,10 @@ systemd: uinput reply-prompt
 	install -m 0644 systemd/quavad.service "$(HOME)/.config/systemd/user/quavad.service"
 	install -m 0644 systemd/quavad.socket "$(HOME)/.config/systemd/user/quavad.socket"
 
+	mkdir -p "$(HOME)/.local/share/bash-completion/completions" "$(HOME)/.local/share/zsh/site-functions"
+	"$(HOME)/.local/bin/quava" completion bash > "$(HOME)/.local/share/bash-completion/completions/quava"
+	"$(HOME)/.local/bin/quava" completion zsh > "$(HOME)/.local/share/zsh/site-functions/_quava"
+
 # 	systemctl --user import-environment DISPLAY WAYLAND_DISPLAY XAUTHORITY XDG_RUNTIME_DIR XDG_SESSION_TYPE
 
 	systemctl --user daemon-reload
@@ -80,6 +84,8 @@ clean-systemd: rm-uinput
 	rm -f "$(HOME)/.local/bin/quavad"
 	rm -f "$(HOME)/.local/bin/quava"
 	rm -f "$(HOME)/.local/bin/quava-reply-prompt"
+	rm -f "$(HOME)/.local/share/bash-completion/completions/quava"
+	rm -f "$(HOME)/.local/share/zsh/site-functions/_quava"
 	rm -rf "$(HOME)/.config/quava"
 	systemctl --user daemon-reload
 

@@ -55,7 +55,15 @@ static void register_desktop_entry(void) {
 		g_bytes_unref(icon);
 	}
 
-	gchar* quoted = g_shell_quote(executable);
+	/* Inside an AppImage /proc/self/exe resolves to a per-run mount point
+	 * (/tmp/.mount_quava-XXXXXX/...) that disappears once the AppImage exits,
+	 * so writing it verbatim would leave a launcher that only works until the
+	 * process quits. Both install paths (make install, install.sh) put the
+	 * binary on PATH as "quava-gui", including the AppImage's internal
+	 * usr/bin/quava-gui, so prefer that stable command name whenever the
+	 * resolved executable's basename matches it. */
+	gchar* basename = g_path_get_basename(executable);
+	gchar* exec_value = g_strcmp0(basename, "quava-gui") == 0 ? g_strdup("quava-gui") : g_shell_quote(executable);
 	gchar* entry = g_strdup_printf(
 		"[Desktop Entry]\n"
 		"Type=Application\n"
@@ -67,14 +75,15 @@ static void register_desktop_entry(void) {
 		"Terminal=false\n"
 		"Categories=Utility;Network;\n"
 		"StartupWMClass=" APP_ID "\n",
-		quoted);
+		exec_value);
 	gchar* entry_path = g_build_filename(g_get_user_data_dir(), "applications", APP_ID ".desktop", NULL);
 
 	write_if_changed(entry_path, entry, strlen(entry));
 
 	g_free(entry_path);
 	g_free(entry);
-	g_free(quoted);
+	g_free(exec_value);
+	g_free(basename);
 	g_free(executable);
 }
 
