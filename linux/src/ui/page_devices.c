@@ -182,7 +182,12 @@ static GtkWidget* status_strip(JsonObject* status) {
 	GtkWidget* flow = gtk_flow_box_new();
 
 	gtk_flow_box_set_selection_mode(GTK_FLOW_BOX(flow), GTK_SELECTION_NONE);
-	gtk_flow_box_set_homogeneous(GTK_FLOW_BOX(flow), FALSE);
+	/* Homogeneous, not FALSE: on GTK 4.14 (the AppImage's bundled runtime), a
+	 * non-homogeneous GtkFlowBox with unevenly-sized children never wraps to
+	 * more than one child per line regardless of available width, pushing
+	 * the strip's height well past the card. GTK 4.20 renders either way
+	 * fine, so homogeneous is the version that actually works everywhere. */
+	gtk_flow_box_set_homogeneous(GTK_FLOW_BOX(flow), TRUE);
 	gtk_flow_box_set_column_spacing(GTK_FLOW_BOX(flow), 8);
 	gtk_flow_box_set_row_spacing(GTK_FLOW_BOX(flow), 8);
 	gtk_flow_box_set_max_children_per_line(GTK_FLOW_BOX(flow), 6);
