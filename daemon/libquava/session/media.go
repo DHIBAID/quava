@@ -86,13 +86,26 @@ func mediaService() (*media.MPRISService, error) {
 	return service, nil
 }
 
+// withIcon resolves and attaches the player's app icon, for IPC callers (the
+// GUI, the CLI) that render it locally. The phone protocol sends icons as
+// their own one-shot message instead (see sendNewPlayerIcons) and never goes
+// through this path.
+func withIcon(player models.MPRISMediaPlayer) models.MPRISMediaPlayer {
+	player.IconPNG = media.AppIconPNG(player.DesktopEntry, player.Identity)
+	return player
+}
+
 func ListMediaPlayers() ([]models.MPRISMediaPlayer, error) {
 	service, err := mediaService()
 	if err != nil {
 		return nil, err
 	}
 
-	return service.ListPlayers(), nil
+	players := service.ListPlayers()
+	for i := range players {
+		players[i] = withIcon(players[i])
+	}
+	return players, nil
 }
 
 func ActiveMediaPlayer() (models.MPRISMediaPlayer, error) {
@@ -101,7 +114,11 @@ func ActiveMediaPlayer() (models.MPRISMediaPlayer, error) {
 		return models.MPRISMediaPlayer{}, err
 	}
 
-	return service.ActivePlayer()
+	player, err := service.ActivePlayer()
+	if err != nil {
+		return models.MPRISMediaPlayer{}, err
+	}
+	return withIcon(player), nil
 }
 
 func SetActiveMediaPlayer(busName string) (models.MPRISMediaPlayer, error) {
@@ -119,7 +136,11 @@ func SetActiveMediaPlayer(busName string) (models.MPRISMediaPlayer, error) {
 		return models.MPRISMediaPlayer{}, err
 	}
 
-	return service.GetPlayer(busName)
+	player, err := service.GetPlayer(busName)
+	if err != nil {
+		return models.MPRISMediaPlayer{}, err
+	}
+	return withIcon(player), nil
 }
 
 // UseAutomaticMediaPlayer clears a manual player selection so the active

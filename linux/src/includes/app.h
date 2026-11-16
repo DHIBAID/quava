@@ -113,6 +113,10 @@ gboolean q_json_bool(JsonObject* object, const gchar* name);
 JsonArray* q_json_array(JsonObject* object, const gchar* name);
 JsonObject* q_json_object(JsonObject* object, const gchar* name);
 gint64 q_json_int(JsonObject* object, const gchar* name, gint64 fallback);
+gdouble q_json_double(JsonObject* object, const gchar* name, gdouble fallback);
+
+/* Decodes a base64-encoded PNG member (as sent for media player icons) into a texture, or NULL. */
+GdkTexture* q_json_texture(JsonObject* object, const gchar* name);
 
 gchar* q_format_time(gint64 microseconds);
 

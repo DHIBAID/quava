@@ -10,7 +10,9 @@ import (
 	_ "image/jpeg"
 	_ "image/png"
 	"log"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -252,12 +254,39 @@ func (b *AndroidNotificationBridge) watch(signals <-chan *dbus.Signal) {
 	}
 }
 
+// replyPromptPath finds quava-reply-prompt next to the running daemon binary
+// first, since `make systemd` installs both into the same directory
+// (typically ~/.local/bin, which a systemd user service's $PATH does not
+// include). Falling back to $PATH covers other install layouts.
+func replyPromptPath() string {
+	const name = "quava-reply-prompt"
+
+	if exe, err := os.Executable(); err == nil {
+		if resolved, err := filepath.EvalSymlinks(exe); err == nil {
+			exe = resolved
+		}
+		if candidate := filepath.Join(filepath.Dir(exe), name); fileExists(candidate) {
+			return candidate
+		}
+	}
+
+	return name
+}
+
+func fileExists(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && !info.IsDir()
+}
+
 // Small native GTK entry dialog and send its text as Android RemoteInput.
+// quava-reply-prompt is Quava's own GTK4 helper (see daemon/helpers), built
+// and installed by `make systemd`/`make update-systemd`; no external
+// dialog tool (e.g. zenity) is required.
 func (b *AndroidNotificationBridge) promptAndReply(notification androidNotification, action int) {
 	defer func() { b.mu.Lock(); delete(b.replying, notification.key); b.mu.Unlock() }()
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	output, err := exec.CommandContext(ctx, "zenity", "--entry", "--title=Quava — Reply", "--text="+notification.actions[action].Title+" to "+notification.appName, "--width=420").Output()
+	output, err := exec.CommandContext(ctx, replyPromptPath(), notification.appName, notification.actions[action].Title).Output()
 	if err != nil {
 		log.Printf("notifications: reply prompt cancelled or unavailable: %v", err)
 		return

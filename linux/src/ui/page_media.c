@@ -5,6 +5,7 @@ typedef struct {
 	GtkWidget* root;
 	GtkWidget* body;		  /* GtkStack: "player" / "empty" */
 	GtkWidget* player_button; /* GtkMenuButton */
+	GtkWidget* player_icon;
 	GtkWidget* player_label;
 	GtkWidget* player_menu;
 	GtkWidget* art_stack;
@@ -29,8 +30,10 @@ typedef struct {
 	gboolean shuffle_on;
 	gboolean updating;
 	gint64 duration_us;
-	gint64 hold_seek_until; /* ignore polled positions after the user seeks */
-	gint64 hold_volume_until;
+	gboolean seek_pending; /* ignore polled positions until the seek command is confirmed */
+	gint64 seek_pending_since;
+	gboolean volume_pending;
+	gint64 volume_pending_since;
 	guint seek_timer;
 	guint volume_timer;
 	guint poll_timer;
@@ -38,6 +41,10 @@ typedef struct {
 } MediaPage;
 
 static MediaPage* page;
+
+/* Safety net: stop trusting a pending seek/volume command if its reply never
+ * arrives (e.g. the daemon connection drops), so the slider isn't stuck forever. */
+#define PENDING_SAFETY_US (8000 * 1000)
 
 /* ---- Commands --------------------------------------------------------------- */
 
@@ -53,13 +60,17 @@ static void command_done(QuavaIpcReply* reply, gpointer data) {
 	poll_now();
 }
 
-static void send_media(const gchar* command, JsonObject* request) {
+static void send_media_cb(const gchar* command, JsonObject* request, QuavaReplyFn callback) {
 	if (request == NULL)
 		request = quava_req_new(command);
 	if (page->bus_name != NULL)
 		quava_req_string(request, "bus_name", page->bus_name);
 
-	quava_ipc_send(request, command_done, NULL);
+	quava_ipc_send(request, callback, NULL);
+}
+
+static void send_media(const gchar* command, JsonObject* request) {
+	send_media_cb(command, request, command_done);
 }
 
 static void play_clicked(GtkButton* button, gpointer data) {
@@ -105,13 +116,25 @@ static void repeat_clicked(GtkButton* button, gpointer data) {
 	send_media("media-loop", request);
 }
 
+static void seek_done(QuavaIpcReply* reply, gpointer data) {
+	(void)data;
+
+	page->seek_pending = FALSE;
+
+	const gchar* error = quava_ipc_error(reply);
+	if (error != NULL)
+		app_toast(page->app, error);
+
+	poll_now();
+}
+
 static gboolean send_seek(gpointer data) {
 	(void)data;
 
 	page->seek_timer = 0;
 	JsonObject* request = quava_req_new("media-seek-to");
 	quava_req_int(request, "position_ms", (gint64)gtk_range_get_value(GTK_RANGE(page->seek)));
-	send_media("media-seek-to", request);
+	send_media_cb("media-seek-to", request, seek_done);
 
 	return G_SOURCE_REMOVE;
 }
@@ -124,7 +147,8 @@ static gboolean seek_changed(GtkRange* range, GtkScrollType scroll, gdouble valu
 	if (page->updating)
 		return FALSE;
 
-	page->hold_seek_until = g_get_monotonic_time() + 1500 * 1000;
+	page->seek_pending = TRUE;
+	page->seek_pending_since = g_get_monotonic_time();
 
 	gchar* text = q_format_time((gint64)value * 1000);
 	gtk_label_set_text(GTK_LABEL(page->time_now), text);
@@ -138,13 +162,25 @@ static gboolean seek_changed(GtkRange* range, GtkScrollType scroll, gdouble valu
 	return FALSE;
 }
 
+static void volume_done(QuavaIpcReply* reply, gpointer data) {
+	(void)data;
+
+	page->volume_pending = FALSE;
+
+	const gchar* error = quava_ipc_error(reply);
+	if (error != NULL)
+		app_toast(page->app, error);
+
+	poll_now();
+}
+
 static gboolean send_volume(gpointer data) {
 	(void)data;
 
 	page->volume_timer = 0;
 	JsonObject* request = quava_req_new("media-volume");
 	quava_req_double(request, "volume", gtk_range_get_value(GTK_RANGE(page->volume)));
-	send_media("media-volume", request);
+	send_media_cb("media-volume", request, volume_done);
 
 	return G_SOURCE_REMOVE;
 }
@@ -158,7 +194,8 @@ static gboolean volume_changed(GtkRange* range, GtkScrollType scroll, gdouble va
 	if (page->updating)
 		return FALSE;
 
-	page->hold_volume_until = g_get_monotonic_time() + 1500 * 1000;
+	page->volume_pending = TRUE;
+	page->volume_pending_since = g_get_monotonic_time();
 	if (page->volume_timer != 0)
 		g_source_remove(page->volume_timer);
 	page->volume_timer = g_timeout_add(140, send_volume, NULL);
@@ -238,6 +275,13 @@ static void apply_player(JsonObject* player) {
 	g_free(page->bus_name);
 	page->bus_name = g_strdup(q_json_string(player, "bus_name", NULL));
 
+	GdkTexture* player_icon = q_json_texture(player, "icon");
+	gtk_widget_set_visible(page->player_icon, player_icon != NULL);
+	if (player_icon != NULL) {
+		gtk_image_set_from_paintable(GTK_IMAGE(page->player_icon), GDK_PAINTABLE(player_icon));
+		g_object_unref(player_icon);
+	}
+
 	gtk_label_set_text(GTK_LABEL(page->player_label), q_json_string(player, "identity", "Media player"));
 	gtk_label_set_text(GTK_LABEL(page->title), q_json_string(metadata, "title", "Unknown title"));
 
@@ -278,16 +322,19 @@ static void apply_player(JsonObject* player) {
 	set_toggle_class(page->repeat, g_strcmp0(page->loop_status, "None") != 0);
 
 	gint64 now = g_get_monotonic_time();
-	gint64 duration = metadata != NULL && json_object_has_member(metadata, "duration")
-						  ? json_object_get_int_member(metadata, "duration")
-						  : 0;
-	gint64 position = json_object_has_member(player, "position") ? json_object_get_int_member(player, "position") : 0;
+	gint64 duration = q_json_int(metadata, "duration", 0);
+	gint64 position = q_json_int(player, "position", 0);
 	page->duration_us = duration;
+
+	if (page->seek_pending && now - page->seek_pending_since > PENDING_SAFETY_US)
+		page->seek_pending = FALSE;
+	if (page->volume_pending && now - page->volume_pending_since > PENDING_SAFETY_US)
+		page->volume_pending = FALSE;
 
 	page->updating = TRUE;
 	gtk_widget_set_sensitive(page->seek, can_seek && duration > 0);
 	gtk_range_set_range(GTK_RANGE(page->seek), 0, duration > 0 ? (double)duration / 1000.0 : 1);
-	if (now >= page->hold_seek_until) {
+	if (!page->seek_pending) {
 		gtk_range_set_value(GTK_RANGE(page->seek), (double)position / 1000.0);
 
 		gchar* current = q_format_time(position);
@@ -298,8 +345,8 @@ static void apply_player(JsonObject* player) {
 	gtk_label_set_text(GTK_LABEL(page->time_total), total);
 	g_free(total);
 
-	if (now >= page->hold_volume_until && json_object_has_member(player, "volume"))
-		gtk_range_set_value(GTK_RANGE(page->volume), json_object_get_double_member(player, "volume"));
+	if (!page->volume_pending && json_object_has_member(player, "volume"))
+		gtk_range_set_value(GTK_RANGE(page->volume), q_json_double(player, "volume", gtk_range_get_value(GTK_RANGE(page->volume))));
 	page->updating = FALSE;
 
 	gtk_stack_set_visible_child_name(GTK_STACK(page->body), "player");
@@ -313,6 +360,7 @@ static void on_active(QuavaIpcReply* reply, gpointer data) {
 		g_clear_pointer(&page->bus_name, g_free);
 		gtk_stack_set_visible_child_name(GTK_STACK(page->body), "empty");
 		gtk_label_set_text(GTK_LABEL(page->player_label), "No player");
+		gtk_widget_set_visible(page->player_icon, FALSE);
 		return;
 	}
 
@@ -334,13 +382,32 @@ static void player_chosen(GtkButton* button, gpointer data) {
 	quava_ipc_send(request, command_done, NULL);
 }
 
-static GtkWidget* menu_item(const gchar* title, const gchar* subtitle, const gchar* bus, gboolean selected) {
+static GtkWidget* player_icon_slot(GdkTexture* texture) {
+	GtkWidget* slot = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
+
+	gtk_widget_set_size_request(slot, 28, 28);
+	gtk_widget_set_halign(slot, GTK_ALIGN_CENTER);
+	gtk_widget_set_valign(slot, GTK_ALIGN_CENTER);
+
+	if (texture != NULL) {
+		GtkWidget* image = gtk_image_new_from_paintable(GDK_PAINTABLE(texture));
+		gtk_image_set_pixel_size(GTK_IMAGE(image), 24);
+		gtk_box_append(GTK_BOX(slot), image);
+	} else {
+		gtk_box_append(GTK_BOX(slot), quava_icon_new(Q_ICON_MUSIC, 18));
+	}
+
+	return slot;
+}
+
+static GtkWidget* menu_item(const gchar* title, const gchar* subtitle, const gchar* bus, gboolean selected, GdkTexture* icon) {
 	GtkWidget* button = gtk_button_new();
 	GtkWidget* row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 10);
 	GtkWidget* text = gtk_box_new(GTK_ORIENTATION_VERTICAL, 1);
 
 	gtk_widget_add_css_class(button, "q-icon-button");
 	gtk_widget_set_size_request(button, 220, 44);
+	gtk_box_append(GTK_BOX(row), player_icon_slot(icon));
 	gtk_widget_set_hexpand(text, TRUE);
 	gtk_box_append(GTK_BOX(text), q_label(title, NULL));
 	if (subtitle != NULL)
@@ -363,7 +430,7 @@ static void on_list(QuavaIpcReply* reply, gpointer data) {
 	(void)data;
 
 	q_clear_box(page->player_menu);
-	gtk_box_append(GTK_BOX(page->player_menu), menu_item("Automatic", "Follow whatever is playing", NULL, FALSE));
+	gtk_box_append(GTK_BOX(page->player_menu), menu_item("Automatic", "Follow whatever is playing", NULL, FALSE, NULL));
 
 	if (quava_ipc_error(reply) != NULL || !json_object_has_member(reply->object, "players"))
 		return;
@@ -375,8 +442,11 @@ static void on_list(QuavaIpcReply* reply, gpointer data) {
 			continue;
 
 		gboolean active = json_object_has_member(player, "is_active") && json_object_get_boolean_member(player, "is_active");
+		GdkTexture* icon = q_json_texture(player, "icon");
 		gtk_box_append(GTK_BOX(page->player_menu),
-					   menu_item(q_json_string(player, "identity", "Player"), q_json_string(player, "playback_status", NULL), q_json_string(player, "bus_name", NULL), active));
+					   menu_item(q_json_string(player, "identity", "Player"), q_json_string(player, "playback_status", NULL), q_json_string(player, "bus_name", NULL), active, icon));
+		if (icon != NULL)
+			g_object_unref(icon);
 	}
 }
 
@@ -438,6 +508,10 @@ GtkWidget* page_media_new(App* app) {
 	/* Player picker */
 	page->player_button = gtk_menu_button_new();
 	GtkWidget* picker = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
+	page->player_icon = gtk_image_new();
+	gtk_image_set_pixel_size(GTK_IMAGE(page->player_icon), 18);
+	gtk_widget_set_visible(page->player_icon, FALSE);
+	gtk_box_append(GTK_BOX(picker), page->player_icon);
 	page->player_label = q_label("No player", NULL);
 	gtk_box_append(GTK_BOX(picker), page->player_label);
 	gtk_box_append(GTK_BOX(picker), quava_icon_new(Q_ICON_CHEVRON, 16));

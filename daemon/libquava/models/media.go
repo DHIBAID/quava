@@ -23,6 +23,12 @@ type MPRISMediaPlayer struct {
 	DesktopEntry string `json:"desktop_entry,omitempty"`
 	Owner        string `json:"owner,omitempty"` // Current unique D-Bus owner
 
+	// 64x64 PNG resolved from the player's desktop entry, base64-encoded by
+	// encoding/json. Populated by IPC handlers for local clients (the GUI);
+	// left unset over the phone protocol, which sends icons as their own
+	// one-shot message instead (see session.sendNewPlayerIcons).
+	IconPNG []byte `json:"icon,omitempty"`
+
 	// Playback state
 	PlaybackStatus string  `json:"playback_status"` // Playing, Paused, Stopped
 	Position       int64   `json:"position"`        // Microseconds
