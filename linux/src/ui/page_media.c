@@ -39,6 +39,7 @@ typedef struct {
 	guint volume_timer;
 	guint poll_timer;
 	guint polls;
+	guint command_seq; /* bumped whenever a seek/volume command completes */
 } MediaPage;
 
 static MediaPage* page;
@@ -120,7 +121,10 @@ static void repeat_clicked(GtkButton* button, gpointer data) {
 static void seek_done(QuavaIpcReply* reply, gpointer data) {
 	(void)data;
 
-	page->seek_pending = FALSE;
+	if (page->seek_timer == 0) {
+		page->seek_pending = FALSE;
+		page->command_seq++;
+	}
 
 	const gchar* error = quava_ipc_error(reply);
 	if (error != NULL)
@@ -166,7 +170,10 @@ static gboolean seek_changed(GtkRange* range, GtkScrollType scroll, gdouble valu
 static void volume_done(QuavaIpcReply* reply, gpointer data) {
 	(void)data;
 
-	page->volume_pending = FALSE;
+	if (page->volume_timer == 0) {
+		page->volume_pending = FALSE;
+		page->command_seq++;
+	}
 
 	const gchar* error = quava_ipc_error(reply);
 	if (error != NULL)
@@ -354,7 +361,11 @@ static void apply_player(JsonObject* player) {
 }
 
 static void on_active(QuavaIpcReply* reply, gpointer data) {
-	(void)data;
+	/* Skip applying a poll that was in flight before a seek/volume command
+	 * completed; applying it now would clobber the command's fresher state. */
+	guint poll_seq = GPOINTER_TO_UINT(data);
+	if (poll_seq != page->command_seq)
+		return;
 
 	const gchar* error = quava_ipc_error(reply);
 	if (error != NULL || !json_object_has_member(reply->object, "player")) {
@@ -454,7 +465,7 @@ static void on_list(QuavaIpcReply* reply, gpointer data) {
 /* ---- Polling ---------------------------------------------------------------------------- */
 
 static void poll_now(void) {
-	quava_ipc_send(quava_req_new("media-active"), on_active, NULL);
+	quava_ipc_send(quava_req_new("media-active"), on_active, GUINT_TO_POINTER(page->command_seq));
 	if (page->polls++ % 4 == 0)
 		quava_ipc_send(quava_req_new("media-list"), on_list, NULL);
 }

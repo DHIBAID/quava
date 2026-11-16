@@ -323,8 +323,8 @@ static void remove_stale_cards(GHashTable* seen_ids) {
 		GtkWidget* widget = g_hash_table_lookup(page->card_widgets, l->data);
 		if (widget != NULL)
 			gtk_box_remove(GTK_BOX(page->list), widget);
-		g_hash_table_remove(page->card_widgets, l->data);
 		g_hash_table_remove(page->card_snapshots, l->data);
+		g_hash_table_remove(page->card_widgets, l->data);
 	}
 	g_list_free(stale);
 }
