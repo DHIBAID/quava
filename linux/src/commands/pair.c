@@ -1,6 +1,7 @@
 #include <string.h>
 
 #include "../includes/app.h"
+#include "../includes/ipc.h"
 
 typedef struct {
 	App* app;
@@ -84,10 +85,8 @@ static void pairing_worker(GTask* task, gpointer source, gpointer task_data, GCa
 		return;
 	}
 
-	guint64 code = (guint64)json_object_get_int_member(reply->object, "code");
-	const gchar* peer_name = json_object_has_member(reply->object, "peer_name")
-								 ? json_object_get_string_member(reply->object, "peer_name")
-								 : pairing->name;
+	guint64 code = (guint64)q_json_int(reply->object, "code", 0);
+	const gchar* peer_name = json_object_has_member(reply->object, "peer_name") ? json_object_get_string_member(reply->object, "peer_name") : pairing->name;
 
 	g_free(pairing->name);
 	pairing->name = g_strdup(peer_name);

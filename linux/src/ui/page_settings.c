@@ -4,6 +4,9 @@ typedef struct {
 	App* app;
 	GtkWidget* list;
 	gchar* snapshot;
+	GHashTable* card_widgets;	/* device id -> GtkWidget* card, currently in the list */
+	GHashTable* card_snapshots; /* device id -> gchar* per-device snapshot */
+	gboolean empty_shown;
 } SettingsPage;
 
 static SettingsPage* page;
@@ -282,6 +285,52 @@ static gchar* relevant_snapshot(JsonObject* reply) {
 	return g_string_free(text, FALSE);
 }
 
+static gchar* json_part(JsonObject* object) {
+	if (object == NULL)
+		return g_strdup("");
+
+	JsonNode* node = json_node_new(JSON_NODE_OBJECT);
+	json_node_set_object(node, object);
+	gchar* text = json_to_string(node, FALSE);
+	json_node_free(node);
+
+	return text;
+}
+
+static gchar* device_snapshot(JsonObject* device, JsonObject* settings, gboolean connected) {
+	gchar* device_part = json_part(device);
+	gchar* settings_part = json_part(settings);
+	gchar* text = g_strdup_printf("%d|%s|%s", connected, device_part, settings_part);
+
+	g_free(device_part);
+	g_free(settings_part);
+
+	return text;
+}
+
+static void remove_stale_cards(GHashTable* seen_ids) {
+	GHashTableIter iter;
+	gpointer key, value;
+	GList* stale = NULL;
+
+	g_hash_table_iter_init(&iter, page->card_widgets);
+	while (g_hash_table_iter_next(&iter, &key, &value)) {
+		if (!g_hash_table_contains(seen_ids, key))
+			stale = g_list_prepend(stale, key);
+	}
+
+	for (GList* l = stale; l != NULL; l = l->next) {
+		GtkWidget* widget = g_hash_table_lookup(page->card_widgets, l->data);
+		if (widget != NULL)
+			gtk_box_remove(GTK_BOX(page->list), widget);
+		g_hash_table_remove(page->card_snapshots, l->data);
+		g_hash_table_remove(page->card_widgets, l->data);
+	}
+	g_list_free(stale);
+}
+
+/* Rebuilds only the card(s) whose device/settings actually changed, so an open
+ * dropdown or in-progress interaction on an unrelated device's card survives. */
 static void on_devices(JsonObject* reply) {
 	gchar* snapshot = relevant_snapshot(reply);
 	if (g_strcmp0(snapshot, page->snapshot) == 0) {
@@ -291,16 +340,23 @@ static void on_devices(JsonObject* reply) {
 	g_free(page->snapshot);
 	page->snapshot = snapshot;
 
-	q_clear_box(page->list);
-
 	JsonArray* devices = NULL;
 	if (reply != NULL && json_object_has_member(reply, "devices") && JSON_NODE_HOLDS_ARRAY(json_object_get_member(reply, "devices")))
 		devices = json_object_get_array_member(reply, "devices");
 
 	if (devices == NULL || json_array_get_length(devices) == 0) {
+		q_clear_box(page->list);
+		g_hash_table_remove_all(page->card_widgets);
+		g_hash_table_remove_all(page->card_snapshots);
+		page->empty_shown = TRUE;
 		gtk_box_append(GTK_BOX(page->list),
 					   q_empty_state(Q_ICON_GEAR, "No paired devices", reply == NULL ? "The Quava daemon isn't running." : "Pair a phone from the Devices page first."));
 		return;
+	}
+
+	if (page->empty_shown) {
+		q_clear_box(page->list);
+		page->empty_shown = FALSE;
 	}
 
 	JsonObject* settings = q_json_object(reply, "device_settings");
@@ -314,20 +370,56 @@ static void on_devices(JsonObject* reply) {
 		}
 	}
 
+	GHashTable* seen_ids = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, NULL);
+	GtkWidget* previous_sibling = NULL;
+
 	for (guint i = 0; i < json_array_get_length(devices); i++) {
 		JsonObject* device = json_array_get_object_element(devices, i);
 		const gchar* id = q_json_string(device, "peer_device_id", NULL);
 
-		if (device != NULL && id != NULL)
-			gtk_box_append(GTK_BOX(page->list), device_settings_card(device, q_json_object(settings, id), g_hash_table_contains(connected, id)));
+		if (device == NULL || id == NULL)
+			continue;
+
+		g_hash_table_add(seen_ids, g_strdup(id));
+
+		gboolean is_connected = g_hash_table_contains(connected, id);
+		gchar* snap = device_snapshot(device, q_json_object(settings, id), is_connected);
+		const gchar* old_snap = g_hash_table_lookup(page->card_snapshots, id);
+		GtkWidget* widget = g_hash_table_lookup(page->card_widgets, id);
+
+		if (widget != NULL && g_strcmp0(old_snap, snap) == 0) {
+			g_free(snap);
+		} else {
+			GtkWidget* card = device_settings_card(device, q_json_object(settings, id), is_connected);
+
+			if (widget != NULL) {
+				gtk_box_insert_child_after(GTK_BOX(page->list), card, widget);
+				gtk_box_remove(GTK_BOX(page->list), widget);
+			} else if (previous_sibling != NULL) {
+				gtk_box_insert_child_after(GTK_BOX(page->list), card, previous_sibling);
+			} else {
+				gtk_box_prepend(GTK_BOX(page->list), card);
+			}
+
+			g_hash_table_insert(page->card_widgets, g_strdup(id), card);
+			g_hash_table_insert(page->card_snapshots, g_strdup(id), snap);
+			widget = card;
+		}
+
+		previous_sibling = widget;
 	}
 
+	remove_stale_cards(seen_ids);
+
+	g_hash_table_unref(seen_ids);
 	g_hash_table_unref(connected);
 }
 
 GtkWidget* page_settings_new(App* app) {
 	page = g_new0(SettingsPage, 1);
 	page->app = app;
+	page->card_widgets = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, NULL);
+	page->card_snapshots = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, g_free);
 
 	GtkWidget* root = gtk_box_new(GTK_ORIENTATION_VERTICAL, 20);
 

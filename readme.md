@@ -29,7 +29,7 @@ Runtime (daemon):
 | `/dev/uinput` access | remote input (see `make uinput`) | kernel module `uinput` |
 | PipeWire (`wpctl`) **or** PulseAudio (`pactl`) | system volume and output devices; picked automatically | `wireplumber` or `pulseaudio-utils` |
 | An MPRIS media player | media page (Spotify, Firefox, VLC, mpv, ...) | |
-| `zenity` | reply prompt for notification actions | `zenity` |
+| GTK4 | reply prompt for notification actions (`quava-reply-prompt`, built by `make systemd`) | `gtk4` |
 | `rsvg-convert` or ImageMagick (optional) | shows SVG-only app icons next to media players | `librsvg2-tools` or `ImageMagick` |
 
 Build:
@@ -38,6 +38,7 @@ Build:
 | --- | --- | --- |
 | Go 1.27 or newer | `go.mod` requires it | `golang` |
 | `make` | install and lint targets | `make` |
+| GTK4 development files (optional) | builds `quava-reply-prompt`; skipped with a warning if missing | `gtk4-devel` |
 
 ### Daemon and CLI
 

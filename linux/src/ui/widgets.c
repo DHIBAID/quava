@@ -135,7 +135,20 @@ gint64 q_json_int(JsonObject* object, const gchar* name, gint64 fallback) {
 	if (object == NULL || !json_object_has_member(object, name))
 		return fallback;
 
-	return json_object_get_int_member(object, name);
+	JsonNode* node = json_object_get_member(object, name);
+	return JSON_NODE_HOLDS_VALUE(node) && json_node_get_value_type(node) != G_TYPE_STRING && json_node_get_value_type(node) != G_TYPE_BOOLEAN
+			   ? json_node_get_int(node)
+			   : fallback;
+}
+
+gdouble q_json_double(JsonObject* object, const gchar* name, gdouble fallback) {
+	if (object == NULL || !json_object_has_member(object, name))
+		return fallback;
+
+	JsonNode* node = json_object_get_member(object, name);
+	return JSON_NODE_HOLDS_VALUE(node) && json_node_get_value_type(node) != G_TYPE_STRING && json_node_get_value_type(node) != G_TYPE_BOOLEAN
+			   ? json_node_get_double(node)
+			   : fallback;
 }
 
 gboolean q_json_bool(JsonObject* object, const gchar* name) {
@@ -144,6 +157,25 @@ gboolean q_json_bool(JsonObject* object, const gchar* name) {
 
 	JsonNode* node = json_object_get_member(object, name);
 	return JSON_NODE_HOLDS_VALUE(node) && json_node_get_value_type(node) == G_TYPE_BOOLEAN && json_node_get_boolean(node);
+}
+
+GdkTexture* q_json_texture(JsonObject* object, const gchar* name) {
+	const gchar* encoded = q_json_string(object, name, NULL);
+	if (encoded == NULL)
+		return NULL;
+
+	gsize length = 0;
+	guchar* data = g_base64_decode(encoded, &length);
+	if (data == NULL || length == 0) {
+		g_free(data);
+		return NULL;
+	}
+
+	GBytes* bytes = g_bytes_new_take(data, length);
+	GdkTexture* texture = gdk_texture_new_from_bytes(bytes, NULL);
+	g_bytes_unref(bytes);
+
+	return texture;
 }
 
 gchar* q_format_time(gint64 microseconds) {

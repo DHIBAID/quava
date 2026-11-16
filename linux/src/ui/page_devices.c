@@ -1,8 +1,7 @@
 #include <string.h>
 
 #include "../includes/app.h"
-
-#define MAX_LISTENERS 4
+#include "../includes/ipc.h"
 
 typedef struct {
 	App* app;
@@ -16,9 +15,12 @@ typedef struct {
 	guint timer;
 } DevicesPage;
 
+typedef struct {
+	DevicesListener fn;
+} ListenerSlot;
+
 static DevicesPage* page;
-static DevicesListener listeners[MAX_LISTENERS];
-static guint listener_count;
+static GPtrArray* listeners; /* ListenerSlot*, grows as pages subscribe */
 
 static gchar* short_id(const gchar* id) {
 	return strlen(id) > 12 ? g_strdup_printf("%.6s…%s", id, id + strlen(id) - 4) : g_strdup(id);
@@ -54,16 +56,23 @@ void devices_action(const gchar* command, const gchar* id, const gchar* success)
 }
 
 void devices_subscribe(DevicesListener listener) {
-	if (listener_count < MAX_LISTENERS)
-		listeners[listener_count++] = listener;
+	if (listeners == NULL)
+		listeners = g_ptr_array_new_with_free_func(g_free);
+
+	ListenerSlot* slot = g_new(ListenerSlot, 1);
+	slot->fn = listener;
+	g_ptr_array_add(listeners, slot);
 
 	if (page != NULL && page->last != NULL)
 		listener(page->last);
 }
 
 static void notify_listeners(JsonObject* reply) {
-	for (guint i = 0; i < listener_count; i++)
-		listeners[i](reply);
+	if (listeners == NULL)
+		return;
+
+	for (guint i = 0; i < listeners->len; i++)
+		((ListenerSlot*)g_ptr_array_index(listeners, i))->fn(reply);
 }
 
 /* ---- Phone status ----------------------------------------------------------------------- */

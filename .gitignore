@@ -1,5 +1,4 @@
 .vscode/
-.clang-format
 
 # build artifacts
 libquava
