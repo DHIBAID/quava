@@ -26,11 +26,26 @@ static gboolean prefers_dark(GtkSettings* settings) {
 	return dark;
 }
 
+/* The stylesheets are plain literal colours (no CSS custom properties / `var()`),
+ * since that syntax only works on GTK 4.15+ and the AppImage bundles whatever
+ * GTK ships with the CI runner's distro, which can be older. Switching themes
+ * means swapping which provider is attached, not toggling a CSS class. */
+static GtkCssProvider* g_active_provider = NULL;
+
 static void apply_scheme(GtkWidget* window) {
+	(void)window;
 	gboolean dark = prefers_dark(gtk_settings_get_default());
 
-	gtk_widget_remove_css_class(window, dark ? "light" : "dark");
-	gtk_widget_add_css_class(window, dark ? "dark" : "light");
+	GtkCssProvider* provider = gtk_css_provider_new();
+	gtk_css_provider_load_from_resource(provider, dark ? "/io/quava/Desktop/app-dark.css" : "/io/quava/Desktop/app-light.css");
+
+	GdkDisplay* display = gdk_display_get_default();
+	if (g_active_provider != NULL) {
+		gtk_style_context_remove_provider_for_display(display, GTK_STYLE_PROVIDER(g_active_provider));
+		g_object_unref(g_active_provider);
+	}
+	gtk_style_context_add_provider_for_display(display, GTK_STYLE_PROVIDER(provider), GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
+	g_active_provider = provider;
 }
 
 static void scheme_changed(GObject* settings, GParamSpec* pspec, gpointer window) {
@@ -41,12 +56,6 @@ static void scheme_changed(GObject* settings, GParamSpec* pspec, gpointer window
 }
 
 void theme_install(GtkWidget* window) {
-	GtkCssProvider* provider = gtk_css_provider_new();
-
-	gtk_css_provider_load_from_resource(provider, "/io/quava/Desktop/app.css");
-	gtk_style_context_add_provider_for_display(gdk_display_get_default(), GTK_STYLE_PROVIDER(provider), GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
-	g_object_unref(provider);
-
 	gtk_widget_add_css_class(window, "quava");
 	apply_scheme(window);
 
