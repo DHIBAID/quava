@@ -4,8 +4,6 @@
 #include <gtk/gtk.h>
 #include <json-glib/json-glib.h>
 
-#include "ipc.h"
-
 /* ---- Icons (hand-drawn with cairo; see ui/icons.c) -------------------- */
 
 typedef enum {
