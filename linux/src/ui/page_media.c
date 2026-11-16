@@ -1,4 +1,5 @@
 #include "../includes/app.h"
+#include "../includes/ipc.h"
 
 typedef struct {
 	App* app;
