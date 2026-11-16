@@ -22,8 +22,22 @@ static gboolean prefers_dark(GtkSettings* settings) {
 	g_object_get(settings, "gtk-theme-name", &theme, NULL);
 	gboolean dark = theme != NULL && strstr(theme, "dark") != NULL;
 	g_free(theme);
+	if (dark)
+		return TRUE;
 
-	return dark;
+	/* On GTK < 4.20 (e.g. the AppImage's bundled runtime), a "name:dark"
+	 * GTK_THEME (as set by linuxdeploy-plugin-gtk's apprun hook) picks the
+	 * dark variant of the named theme without touching gtk-theme-name or
+	 * gtk-application-prefer-dark-theme at all, so neither check above can
+	 * see it. Read the raw variant suffix directly as a last resort. */
+	const gchar* env_theme = g_getenv("GTK_THEME");
+	if (env_theme != NULL) {
+		const gchar* variant = strchr(env_theme, ':');
+		if (variant != NULL && strcmp(variant + 1, "dark") == 0)
+			return TRUE;
+	}
+
+	return FALSE;
 }
 
 /* The stylesheets are plain literal colours (no CSS custom properties / `var()`),
