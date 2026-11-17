@@ -19,6 +19,18 @@ signed Android APK. See `.github/workflows/release.yml`.
 
 ## Install on Linux
 
+### Quick install
+
+Installs the daemon, CLI, and desktop app (GUI) from the latest GitHub release:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/DHIBAID/quava/main/install.sh | bash
+```
+
+This sets up the systemd user service, shell completions, and `uinput` access, and
+installs the GUI as an AppImage (amd64 only; see `install.sh` for details). To build
+from source instead, see below.
+
 ### What you need
 
 Runtime (daemon):
